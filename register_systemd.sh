@@ -17,7 +17,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/var/lib/user_updater/user_updater.sh
+ExecStart=bash /var/lib/user_updater/user_updater.sh
 Restart=always
 User=root
 WorkingDirectory=/var/lib/user_updater
