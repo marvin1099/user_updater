@@ -6,17 +6,11 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-deprun=0
-if [[ -f "get_dependecys.sh" ]]
+install_dir="/var/lib/user_updater"
+if [[ -f "get_dependecys.sh" ]] && [[ "$(pwd)" -ne "$install_dir" ]]
 then
     ./get_dependecys.sh
-    if [[ $? -eq 0 ]]
-    then
-        deprun=1
-    fi
 fi
-
-install_dir="/var/lib/user_updater"
 
 git=0
 cd "$install_dir"
@@ -47,10 +41,7 @@ then
 fi
 
 cd "$install_dir"
-if [[ $deprun -eq 0 ]]
-then
-    ./get_dependecys.sh
-fi
+./get_dependecys.sh
 if [[ $? -ne 0 ]]
 then
     exit 1
