@@ -46,9 +46,9 @@ and make shure they are added to yor PATH varrible.
 3. **Registers a GUI autostart app:**  
    Each user gets a desktop GUI app that notifies when updates are being run.
 
-Keep in mind that the `builder` user gets deleted after use as to prevent any atacks.
-After all this `builder` user can run sudo without a password.
-This could potentially lead to passwordless root access for anyone.
+Keep in mind that the `builder` user gets deleted after use as to prevent any atacks.  
+After all this `builder` user can run sudo without a password.  
+This could potentially lead to passwordless root access for anyone.  
 This is why this user gets removed after use.
    
 ---
