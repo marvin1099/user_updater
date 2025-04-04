@@ -3,27 +3,27 @@
 uptoml="$HOME/.config/topgrade.toml"
 logfile="/tmp/topgrade-report.log"
 
-touch "$logfile"
-chmod 777 "$logfile" 2>/dev/null
+sudo touch "$logfile"
+sudo chmod 777 "$logfile" 2>/dev/null
 
-touch "$uptoml"
+sudo touch "$uptoml"
 misc=0
-if cat "$uptoml" | grep "[misc]" > /dev/null; then
+if sudo cat "$uptoml" | grep "[misc]" > /dev/null; then
     misc=1
 fi
-if cat "$uptoml" | grep "assume_yes =" > /dev/null; then
+if sudo cat "$uptoml" | grep "assume_yes =" > /dev/null; then
     if [[ $misc -eq 1 ]]
     then
-        sed -i '/assume_yes =/c\assume_yes = true' "$uptoml" > /dev/null
+        sudo sed -i '/assume_yes =/c\assume_yes = true' "$uptoml" > /dev/null
     else
-        sed -i '/assume_yes =/c\[misc]\nassume_yes = true' "$uptoml" > /dev/null
+        sudo sed -i '/assume_yes =/c\[misc]\nassume_yes = true' "$uptoml" > /dev/null
     fi
 else
     if [[ $misc -eq 1 ]]
     then
-        sed -i '/\[misc\]/c\[misc]\nassume_yes = true' "$uptoml" > /dev/null
+        sudo sed -i '/\[misc\]/c\[misc]\nassume_yes = true' "$uptoml" > /dev/null
     else
-        echo "[misc]"$'\n'"assume_yes = true" >> "$uptoml"
+        sudo echo "[misc]"$'\n'"assume_yes = true" >> "$uptoml"
     fi
 fi
 
