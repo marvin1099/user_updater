@@ -11,6 +11,8 @@ SCRIPTPATH=$(dirname "$SCRIPT")
 
 cd "$SCRIPTPATH"
 
+./register_updater_gui.sh
+
 # Get builder user
 builder_usernames="builder_usernames.txt"
 err=0
@@ -37,6 +39,5 @@ then
     exit 1
 fi
 
+echo "Got build user $user"
 sudo -u "$user" ./run-update.sh
-
-./register_updater_gui.sh
