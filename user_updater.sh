@@ -37,15 +37,6 @@ then
     exit 1
 fi
 
-# wait 5 minutes for a gui user
-gui_user=$(timeout 300 ./find_gui_user.sh)
-
-if [[ -n $gui_user ]]
-then
-    # Run the user gui
-    chmod 777 ./gui-report.sh
-    IFS=' ' read -r display guser <<< "$gui_user"
-    sudo -u "$guser" ./gui-report.sh "$display" "$guser"
-fi
-
 sudo -u "$user" ./run-update.sh
+
+./register_updater_gui.sh

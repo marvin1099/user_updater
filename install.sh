@@ -67,3 +67,5 @@ do
 done
 
 ./register_systemd.sh
+
+./register_updater_gui.sh

@@ -18,7 +18,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 ExecStart=bash /var/lib/user_updater/user_updater.sh
-Restart=always
+Restart=on-failure
 User=root
 WorkingDirectory=/var/lib/user_updater
 
@@ -33,6 +33,7 @@ systemctl daemon-reload
 systemctl enable user_updater.service
 
 # Start the service immediately
-systemctl start user_updater.service
+#systemctl start user_updater.service
 
-echo "Service user_updater has been created and started."
+echo "Service user_updater has been created"
+

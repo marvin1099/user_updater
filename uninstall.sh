@@ -14,4 +14,11 @@ rm "$SERVICE_FILE"
 
 ./delete_and_note_users.sh
 
+for user in $(ls /home); do
+    desktop_file="/home/$user/.config/autostart/gui-report.desktop"
+    new_scipt_path="/home/$user/.config/user_updater/gui-report.sh"
+    rm $desktop_file
+    rm $new_scipt_path
+done
+
 rm -r "$install_dir"

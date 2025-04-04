@@ -11,7 +11,7 @@ do
         while IFS= read -r tty
         do
             user=$(who | awk -v tty="$tty" '$2 == tty {print $1}')
-            display=$(who | awk -v tty="$tty" '$2 == tty {print substr($5, 2, length($5) - 2)}')
+            #display=$(who | awk -v tty="$tty" '$2 == tty {print substr($5, 2, length($5) - 2)}')
             if [[ -n "$user" ]]
             then
                 #echo "User $user is using a graphical session."
@@ -25,4 +25,4 @@ do
     fi
     sleep 1
 done
-echo $display $user
+echo $user
