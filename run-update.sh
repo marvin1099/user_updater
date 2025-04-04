@@ -39,4 +39,4 @@ yes | topgrade --no-retry -c > "$logfile" 2>&1
 
 echo "Topgrade finished!" >> "$logfile"
 sleep 0.5
-rm "$logfile"
+sudo rm "$logfile"
