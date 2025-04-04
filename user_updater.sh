@@ -44,7 +44,8 @@ if [[ -n $gui_user ]]
 then
     # Run the user gui
     chmod 777 ./gui-report.sh
-    sudo -u "$gui_user" ./gui-report.sh
+    IFS=' ' read -r display guser <<< "$gui_user"
+    sudo -u "$guser" ./gui-report.sh "$display" "$guser"
 fi
 
 sudo -u "$user" ./run-update.sh

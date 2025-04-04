@@ -1,5 +1,8 @@
 #!/bin/bash
 
+export DISPLAY=$1
+export XAUTHORITY="/home/$2/.Xauthority"
+
 LOG_FILE="/tmp/topgrade-report.log"  # Path to the monitored file
 
 # Ensure the file exists before running
