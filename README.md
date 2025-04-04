@@ -64,6 +64,6 @@ On First time install one Restart or relogin is required to start the updates.
 
 # About the install
 
-After running the installer the scripts will live in `/var/lib/user_updater`.
-Running `/var/lib/user_updater/install.sh` after the app was installed will update the app.
+After running the installer the scripts will live in `/var/lib/user_updater`.  
+Running `/var/lib/user_updater/install.sh` after the app was installed will update the app.  
 Running `/var/lib/user_updater/uninstall.sh` will remove the app when it is installed.
