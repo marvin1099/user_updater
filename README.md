@@ -1,23 +1,46 @@
 ### **user_updater**
-A simple tool for automatic system updates using `topgrade`, featuring a background process and a simple GUI to show progress.
 
-Only Unix systems are suported.  
-A Mac system may work but no promises. 
+A simple tool for automatic system updates using [`topgrade`](https://github.com/topgrade-rs/topgrade),  
+featuring a background systemd service and a lightweight GUI to notify users of ongoing updates.
+
+> Only Unix systems are supported.  
+> macOS *might* work, but is not officially supported.
 
 ---
 
-### Features
-- Automatic system updates using [topgrade](https://github.com/topgrade-rs/topgrade)
-- GUI notification when updates are running
-- Dedicated `builder` user for background tasks (name randomized)
-- Secure: no password login for builder, runs updates via systemd
-- Runs automatically in the background after install
-- Works system-wide for all users (autostarts GUI per user; yad window)
+###  Features
+
+- Automatic system updates via [`topgrade`](https://github.com/topgrade-rs/topgrade)
+- GUI notification when updates are in progress (`yad` popup window)
+- A temporary, passwordless `builder` user (name randomized)
+- Secure by default — `builder` has no login access and is deleted after use
+- Background updates via systemd
+- GUI notification autostarts per user
+- Minimal system impact — zero interference with your daily use
+
+---
+
+### Why It's Great for New or Non-Technical Linux Users
+
+Many Linux users especially beginners or those who use Linux casually  
+forget or don’t know how to keep their systems updated.
+
+**user_updater** solves this by:
+
+- Automatically updating your system in the background — no terminal skills required
+- Showing a friendly popup when updates are happening, so you know not to shut down or reboot during critical updates
+- Ensuring your system stays secure and maintained with minimal input
+
+It also runs safely by:
+- Using a separate background user
+- Not requiring you to enter your password every time
+- Deleting the `builder` user after its job is done, preventing abuse
 
 ---
 
 ### Install
-You can install `user_updater` with a single command:
+
+Install with a single command:
 
 ```bash
 bash <(curl -s https://codeberg.org/marvin1099/user_updater/raw/branch/main/install.sh)
@@ -25,45 +48,54 @@ bash <(curl -s https://codeberg.org/marvin1099/user_updater/raw/branch/main/inst
 
 ---
 
-# Dependencies
+### Dependencies
 
-The app need standard unix tools.  
-It will also need `git awk sudo topgrade yad`.  
-These should get pulled by the installer.  
-if they do not get pulled install them manually,  
-and make shure they are added to yor PATH varrible. 
+You'll need the following tools installed (the installer will try to fetch them for you):
+
+```
+git awk sudo topgrade yad
+```
+
+If any are missing, install them manually using your package manager (e.g., `pacman`, `apt`, `dnf`, etc.), and ensure they’re in your `PATH`.
 
 ---
 
 ### How It Works
-   
-1. **Creates a special user:**  
-   The installer sets up a locked `builder` user with passwordless sudo access.
-      
-2. **Sets up a systemd service:**  
-   A root-level systemd service launches on boot, switches to `builder`, and runs `topgrade` silently in the background.
-   
-3. **Registers a GUI autostart app:**  
-   Each user gets a desktop GUI app that notifies when updates are being run.
 
-Keep in mind that the `builder` user gets deleted after use as to prevent any atacks.  
-After all this `builder` user can run sudo without a password.  
-This could potentially lead to passwordless root access for anyone.  
-This is why this user gets removed after use.
-   
+1. **Creates a temporary user:**  
+   A locked, randomized `builder` user is created with passwordless `sudo` access — only used for running updates.
+
+2. **Systemd handles updates:**  
+   A service runs at boot as root, switches to `builder`, and launches `topgrade` to update your system silently in the background.
+
+3. **Notifies logged-in users:**  
+   A lightweight GUI (`yad`) pops up on each desktop user account, showing that updates are in progress.
+
+4. **Self-cleans:**  
+   Once the update job is complete, the `builder` user is deleted to eliminate any potential security risk.
+
 ---
 
 ### After Installation
-- **Restart or relogin is required** to activate everything properly.
-- **Adding new users?** Restart once to index them, and again for the GUI to show.
 
-Updates will still run in the background **even if the GUI isn't showing yet.**  
-On First time install one Restart or relogin is required to start the updates.
+- **Restart or relogin** to activate the updater and GUI.
+- **Adding new users?**  
+  Restart once to index them, and again to show the GUI for them.
 
----
+Even if the GUI doesn’t show up yet, updates are still running in the background.
 
-# About the install
 
-After running the installer the scripts will live in `/var/lib/user_updater`.  
-Running `/var/lib/user_updater/install.sh` after the app was installed will update the app.  
-Running `/var/lib/user_updater/uninstall.sh` will remove the app when it is installed.
+### File Locations & Maintenance
+
+- App files live in:  
+  `/var/lib/user_updater`
+
+- To update the updater itself:  
+  ```bash
+  /var/lib/user_updater/install.sh
+  ```
+
+- To uninstall completely:  
+  ```bash
+  /var/lib/user_updater/uninstall.sh
+  ```
