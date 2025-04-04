@@ -27,6 +27,7 @@ do
         else
             err=1
         fi
+    fi
 done < "$builder_usernames"
 
 if [[ $err -eq 1 ]] || [[ -z $user ]]
