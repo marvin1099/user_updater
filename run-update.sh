@@ -7,10 +7,11 @@ sudo touch "$logfile"
 sudo chmod 777 "$logfile" 2>/dev/null
 sudo chown root:root "$logfile"
 
-g=$(timeout 1 topgrade --edit-config > /dev/null 2>&1)
 sudo mkdir -p "$HOME/.config"
 sudo chown "$USER":"$USER" "$HOME/.config"
 sudo chmod u+rwx "$HOME/.config"
+
+g=$(timeout 1 topgrade --edit-config > /dev/null 2>&1)
 sudo touch "$uptoml"
 sudo chown "$USER":"$USER" "$uptoml"
 sudo chmod u+rwx "$uptoml"
