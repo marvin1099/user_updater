@@ -8,10 +8,9 @@ fi
 
 install_dir="/var/lib/user_updater"
 
-
-cd "$install_dir"
 git=0
-if [[ -d user_updater ]]
+cd "$install_dir"
+if [[ $? -eq 0 ]]
 then
     if git rev-parse --is-inside-work-tree 2> /dev/null
     then
@@ -24,6 +23,8 @@ cd "$(dirname "$install_dir")"
 
 if [[ $git -eq 0 ]]
 then
+
+
     if ! git clone https://codeberg.org/marvin1099/user_updater
     then
         if ! git clone https://github.com/marvin1099/user_updater
