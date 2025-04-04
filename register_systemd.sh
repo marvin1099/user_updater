@@ -9,7 +9,7 @@ fi
 SERVICE_FILE="/etc/systemd/system/user_updater.service"
 
 # Create systemd service file
-cat <<EOF | sudo tee "$SERVICE_FILE"
+sudo bash -c "cat > '$SERVICE_FILE'" <<EOF
 [Unit]
 Description=User Updater Service
 After=network-online.target
@@ -28,6 +28,9 @@ EOF
 
 # Reload systemd to recognize the new service
 systemctl daemon-reload
+
+# Disable the service if enabled
+systemctl disable user_updater.service 2>/dev/null
 
 # Enable the service to start on boot
 systemctl enable user_updater.service
