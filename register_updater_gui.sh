@@ -23,7 +23,7 @@ fi
 # Loop through all users on the system
 for user in $(ls /home); do
     # Skip system users
-    if [ ! -d "/home/$user" ]; then
+    if [[ ! -d "/home/$user" ]] || ! id "$user" &>/dev/null; then
         continue
     fi
 
@@ -48,7 +48,7 @@ for user in $(ls /home); do
     # Write the .desktop entry for autostart
     echo "[Desktop Entry]" > "$desktop_file"
     echo "Type=Application" >> "$desktop_file"
-    echo "Exec=$new_scipt_path" >> "$desktop_file"
+    echo "Exec=bash '$new_scipt_path'" >> "$desktop_file"
     echo "Name=Update GUI Report" >> "$desktop_file"
     echo "Comment=Start the Update GUI report automatically" >> "$desktop_file"
     echo "X-GNOME-Autostart-enabled=true" >> "$desktop_file"
