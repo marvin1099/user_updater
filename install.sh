@@ -7,9 +7,9 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 install_dir="/var/lib/user_updater"
-if [[ -f "get_dependecys.sh" ]] && [[ "$(pwd)" -ne "$install_dir" ]]
+if [[ -f "get_dependencies.sh" ]] && [[ "$(pwd)" != "$install_dir" ]]
 then
-    ./get_dependecys.sh
+    ./get_dependencies.sh
 fi
 
 git=0
@@ -41,7 +41,7 @@ then
 fi
 
 cd "$install_dir"
-./get_dependecys.sh
+./get_dependencies.sh
 if [[ $? -ne 0 ]]
 then
     exit 1
