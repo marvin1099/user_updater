@@ -57,7 +57,7 @@ This is why this user gets removed after use.
 - **Restart or relogin is required** to activate everything properly.
 - **Adding new users?** Restart once to index them, and again for the GUI to show.
 
-Updates will still run in the background **even if the GUI isn't showing yet.**
+Updates will still run in the background **even if the GUI isn't showing yet.**  
 On First time install one Restart or relogin is required to start the updates.
 
 ---
