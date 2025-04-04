@@ -6,6 +6,16 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
+deprun=0
+if [[ -f "get_dependecys.sh" ]]
+then
+    ./get_dependecys.sh
+    if [[ $? -eq 0 ]]
+    then
+        deprun=1
+    fi
+fi
+
 install_dir="/var/lib/user_updater"
 
 git=0
@@ -37,7 +47,10 @@ then
 fi
 
 cd "$install_dir"
-./get_dependecys.sh
+if [[ $deprun -eq 0 ]]
+then
+    ./get_dependecys.sh
+fi
 if [[ $? -ne 0 ]]
 then
     exit 1
