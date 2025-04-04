@@ -47,30 +47,6 @@ then
     exit 1
 fi
 
-# Make builder user if not avalible
-builder_usernames="builder_usernames.txt"
-retryed=0
-while [[ -z $user ]] || ! id "$user" &>/dev/null
-do
-    if [[ $retryed -eq 1 ]]
-    then
-        ./make_builder_user.sh
-    fi
-
-    while read j
-    do
-        if id "$j" &>/dev/null
-        then
-            user="$j"
-            userdir="/tmp/$user"
-            mkdir -p "$userdir"
-            break
-        fi
-    done < "$builder_usernames"
-
-    retryed=1
-done
-
 ./register_systemd.sh
 
 ./register_updater_gui.sh

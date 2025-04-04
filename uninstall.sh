@@ -16,7 +16,7 @@ rm "$SERVICE_FILE"
 
 for user in $(ls /home); do
     desktop_file="/home/$user/.config/autostart/gui-report.desktop"
-    new_scipt_path="/home/$user/.config/user_updater/gui-report.sh"
+    new_scipt_path="/home/$user/.config/user_updater/gui_report.sh"
     rm $desktop_file
     rm $new_scipt_path
 done

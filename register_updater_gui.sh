@@ -12,7 +12,7 @@ SCRIPTPATH=$(dirname "$SCRIPT")
 cd "$SCRIPTPATH"
 
 # Path to the script you want to register for autostart
-script_path="gui-report.sh"
+script_path="gui_report.sh"
 
 # Check if the script exists
 if [ ! -f "$script_path" ]; then
@@ -33,7 +33,7 @@ for user in $(ls /home); do
 
     # Create the .desktop file for the autostart entry
     desktop_file="/home/$user/.config/autostart/gui-report.desktop"
-    new_scipt_path="/home/$user/.config/user_updater/gui-report.sh"
+    new_scipt_path="/home/$user/.config/user_updater/gui_report.sh"
 
     cat "$script_path" > "$new_scipt_path"
     chmod u+rwx "$new_scipt_path"

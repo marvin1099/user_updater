@@ -34,10 +34,11 @@ done < "$builder_usernames"
 
 if [[ $err -eq 1 ]] || [[ -z $user ]]
 then
-    echo "Error, builder user not found."
-    echo "Please rerun the installer."
-    exit 1
+    out=$(./make_builder_user.sh)
+    user=$(echo "$out" | tail -1)
 fi
 
 echo "Got build user $user"
 sudo -u "$user" ./run-update.sh
+
+sleep 30; ./delete_and_note_users.sh
