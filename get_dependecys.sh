@@ -7,7 +7,7 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # List of packages to install
-deps=("git","awk","sudo","topgrade","yad")
+deps=("git" "awk" "sudo" "topgrade" "yad")
 
 # Detect package manager
 if command -v pacman &>/dev/null; then
@@ -46,18 +46,19 @@ done
 # Install missing dependencies if any
 if [ ${#to_install[@]} -gt 0 ]; then
     echo "Installing missing packages: ${to_install[*]}"
-    $PKG_MANAGER ${to_install[@]}
+    $PKG_MANAGER "${to_install[@]}"
 fi
 
+# Verify installation
 err=0
 for pkg in "${deps[@]}"; do
     if ! command -v "$pkg" &>/dev/null; then
-        echo "There was a error installing $pkg"
+        echo "There was an error installing $pkg"
         err=1
     fi
 done
-if [[ "$err" -eq 1 ]]
-then
+
+if [[ "$err" -eq 1 ]]; then
     echo "Install these manually"
     echo "Can't continue without dependencies"
     echo "Exiting..."
