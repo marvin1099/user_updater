@@ -80,7 +80,7 @@ If any are missing, install them manually using your package manager (e.g., `pac
 
 - **Restart or relogin** to activate the updater and GUI.
 - **Adding new users?**  
-  Restart once to index them, and again to show the GUI for them.
+  Restart once to index them (or rerun install.sh), and again to show the GUI for them.
 
 Even if the GUI doesn’t show up yet, updates are still running in the background.
 
