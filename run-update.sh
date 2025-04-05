@@ -11,7 +11,6 @@ sudo mkdir -p "$HOME/.config"
 sudo chown "$USER":"$USER" "$HOME/.config"
 sudo chmod u+rwx "$HOME/.config"
 
-g=$(timeout 1 topgrade --edit-config > /dev/null 2>&1)
 sudo touch "$uptoml"
 sudo chown "$USER":"$USER" "$uptoml"
 sudo chmod u+rwx "$uptoml"
@@ -25,14 +24,14 @@ if cat "$uptoml" | grep "assume_yes =" > /dev/null; then
     then
         sed -i '/assume_yes =/c\assume_yes = true' "$uptoml" > /dev/null
     else
-        sed -i '/assume_yes =/c\[misc]\nassume_yes = true' "$uptoml" > /dev/null
+        sed -i '/assume_yes =/c\[misc]\n\nassume_yes = true' "$uptoml" > /dev/null
     fi
 else
     if [[ $misc -eq 1 ]]
     then
-        sed -i '/\[misc\]/c\[misc]\nassume_yes = true' "$uptoml" > /dev/null
+        sed -i '/\[misc\]/c\[misc]\n\nassume_yes = true' "$uptoml" > /dev/null
     else
-        echo "[misc]"$'\n'"assume_yes = true" >> "$uptoml"
+        echo $'[include]\n\n[misc]\n\nassume_yes = true\n\n[pre_commands]\n\n[post_commands]\n\n[commands]\n\n[python]\n\n[composer]\n\n[brew]\n\n[linux]\n\n[git]\n\n[windows]\n\n[npm]\n\n[yarn]\n\n[deno]\n\n[vim]\n\n[firmware]\n\n[vagrant]\n\n[flatpak]\n\n[distrobox]\n\n[containers]\n\n[lensfun]\n\n[julia]' >> "$uptoml"
     fi
 fi
 
