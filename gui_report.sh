@@ -41,7 +41,7 @@ do
         done
         if [[ -f "$LOG_FILE" ]]
         then
-            echo "$startmsg" > "$PIPE" &
+            echo "$startmsg $(random)" > "$PIPE" &
             cat "$LOG_FILE" > "$PIPE" &
         fi
     done
