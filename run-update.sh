@@ -2,19 +2,26 @@
 
 logfile="/tmp/topgrade-report.log"
 uptoml="$HOME/.config/topgrade.toml"
+MAX_RETRIES=3
+TIMEOUT_SECONDS=120
 
+# Prepare log file
 sudo touch "$logfile"
 sudo chmod 777 "$logfile" 2>/dev/null
 sudo chown root:root "$logfile"
 
+# Ensure topgrade config directory exists
 sudo mkdir -p "$HOME/.config"
 sudo chown "$USER":"$USER" "$HOME/.config"
 sudo chmod u+rwx "$HOME/.config"
 
+# Generate config if missing
+timeout 1 topgrade --edit-config > /dev/null 2>&1
 sudo touch "$uptoml"
 sudo chown "$USER":"$USER" "$uptoml"
 sudo chmod u+rwx "$uptoml"
 
+# Enable assume_yes in config
 misc=0
 if cat "$uptoml" | grep "[misc]" > /dev/null; then
     misc=1
@@ -35,7 +42,35 @@ else
     fi
 fi
 
-yes | topgrade --no-retry -c > "$logfile" 2>&1
+# Function to run topgrade with monitoring
+run_with_watchdog() {
+    echo "Starting topgrade attempt $1..."
+    yes | topgrade --no-retry -c > "$logfile" 2>&1 &
+    pid=$!
+
+    while kill -0 $pid 2>/dev/null; do
+        sleep 10
+        last_modified=$(stat -c %Y "$logfile")
+        now=$(date +%s)
+        diff=$((now - last_modified))
+
+        if (( diff > TIMEOUT_SECONDS )); then
+            echo "Detected potential stalemate. Killing topgrade (PID $pid)..."
+            kill -9 $pid
+            wait $pid 2>/dev/null
+            return 1
+        fi
+    done
+    return 0
+}
+
+# Try with retries
+attempt=1
+while (( attempt <= MAX_RETRIES )); do
+    run_with_watchdog $attempt && break
+    attempt=$((attempt + 1))
+    echo "Retrying... ($attempt/$MAX_RETRIES)"
+done
 
 echo "Topgrade finished!" >> "$logfile"
 sleep 0.5
