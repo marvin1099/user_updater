@@ -54,7 +54,11 @@ fi
 if [[ -n "$SUDO_USER" ]]; then
     report_gui="/home/$SUDO_USER/.config/user_updater/gui_report.sh"
     yad --text="Testing if Gui output is available" --no-buttons --timeout=1 --no-focus --undecorated --posx 0 --posy 0 --width=350 --height=40
-    if [[ $? -eq 0 && -f "$report_gui" ]]; then
+    if [[ $? -eq 70 && -f "$report_gui" ]]; then
+        g_pid=$(ps aux | awk '/gui_report.sh/ && !/awk/ {if ($1 == "'$SUDO_USER'" && $11 ~ "bash" && $12 ~ "user_updater/gui_report.sh") print $2}' | head -n 1) #'
+        if [[ -n $g_pid ]]; then
+            kill -9 $g_pid
+        fi
         sudo -u "$SUDO_USER" "$report_gui"
         systemctl start user_updater.service
     fi
