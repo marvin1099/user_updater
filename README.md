@@ -51,7 +51,7 @@ Your user password will be requested during installation.
 If you **don’t have sudo yet**, use this command instead — it also installs sudo:
 
 ```bash
-cd /tmp; curl -s https://codeberg.org/marvin1099/user_updater/raw/branch/main/install.sh > install.sh; chmod +x install.sh; su -c "./install.sh"; rm install.sh
+cd /tmp && curl -fsS https://codeberg.org/marvin1099/user_updater/raw/branch/main/get_dependencies.sh -o get_dependencies.sh && chmod +x get_dependencies.sh && su -c "./get_dependencies.sh" && curl -fsS https://codeberg.org/marvin1099/user_updater/raw/branch/main/install.sh | sudo bash; rm -f get_dependencies.sh
 ```
 
 Here, the **root password** will be required instead.
