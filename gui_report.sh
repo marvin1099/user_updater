@@ -30,6 +30,10 @@ do
     MARGIN=40
     WINDOW_WIDTH=600
     WINDOW_HEIGHT=400
+    MONITOR_X=
+    MONITOR_Y=
+    SCREEN_WIDTH=
+    SCREEN_HEIGHT=
     while [[ -f "$LOG_FILE" ]]
     do
         if command -v xrandr >/dev/null 2>&1; then
