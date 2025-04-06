@@ -131,6 +131,8 @@ To skip the second re-login step, run this **as the GUI user**:
 Running both of these will fully skip the re-login process.  
 See below for how to manually trigger an update.
 
+Alternately run rerun `./install.sh` (see below).
+
 ---
 
 ### File Locations & Maintenance
