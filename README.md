@@ -43,8 +43,16 @@ It also runs safely by:
 Install with a single command:
 
 ```bash
-bash <(curl -s https://codeberg.org/marvin1099/user_updater/raw/branch/main/install.sh)
+curl -s https://codeberg.org/marvin1099/user_updater/raw/branch/main/install.sh | sudo bash
 ```
+Here your user password will have to be entered when asked.
+
+If you don't not have sudo yet you can use this command to install the tool.  
+This command will also install sudo:
+```bash
+cd /tmp; curl -s https://codeberg.org/marvin1099/user_updater/raw/branch/main/install.sh > install.sh; chmod +x install.sh; su -c "./install.sh"; rm install.sh
+```
+Here the root password will have to be entered when asked.
 
 ---
 
@@ -53,10 +61,17 @@ bash <(curl -s https://codeberg.org/marvin1099/user_updater/raw/branch/main/inst
 You'll need the following tools installed (the installer will try to fetch them for you):
 
 ```
-git awk sudo topgrade yad
+git awk sudo topgrade yad systemd
 ```
 
-If any are missing, install them manually using your package manager (e.g., `pacman`, `apt`, `dnf`, etc.), and ensure they’re in your `PATH`.
+If any cant be installed by the script, install them manually using your package manager  
+(e.g., `pacman`, `apt`, `dnf`, etc.), and ensure they’re in your `PATH`.
+
+Some other standard unix tools are expexted, you should have them installed allready.  
+But just in case here are the other toos that are used so you can check.
+```
+cd mkdir dirname touch cat id rm kill who sleep read ps readlink mktemp basename useradd chown chmod passwd getent usermod tail head grep cut ls date stat yes
+```
 
 ---
 
@@ -80,22 +95,30 @@ If any are missing, install them manually using your package manager (e.g., `pac
 
 - **Restart or relogin** to activate the updater and GUI.
 - **Adding new users?**  
-  Restart once to index them (or rerun install.sh), and again to show the GUI for them.
+  Restart once to index them, and again to show the GUI for them.
 
 Even if the GUI doesn’t show up yet, updates are still running in the background.
 
+To index new users right avay run:
+```bash
+sudo /var/lib/user_updater/register_updater_gui.sh
+```
+To skip the re-login fully run **AS GUI USER**:
+```bash
+/home/$USER/.config/user_updater/gui_report.sh
+```
 
 ### File Locations & Maintenance
 
 - App files live in:  
   `/var/lib/user_updater`
 
-- To update the updater itself:  
+- To update / reinstall the updater itself:  
   ```bash
-  /var/lib/user_updater/install.sh
+  sudo /var/lib/user_updater/install.sh
   ```
 
 - To uninstall completely:  
   ```bash
-  /var/lib/user_updater/uninstall.sh
+  sudo /var/lib/user_updater/uninstall.sh
   ```
