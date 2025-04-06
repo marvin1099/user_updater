@@ -25,8 +25,10 @@ for user in $(ls /home); do
     fi
     desktop_file="/home/$user/.config/autostart/gui_report.desktop"
     new_scipt_path="/home/$user/.config/user_updater/gui_report.sh"
-    rm -f $desktop_file
-    rm -f $new_scipt_path
+    new_user_tools="/home/$user/.config/user_updater/update_user_tools.sh"
+    rm -f "$desktop_file"
+    rm -f "$new_scipt_path"
+    rm -f "$new_user_tools"
 done
 
 rm -rf "$install_dir"
