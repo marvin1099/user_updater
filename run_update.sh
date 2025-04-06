@@ -3,7 +3,7 @@
 logfile="/tmp/topgrade-report.log"
 uptoml="$HOME/.config/topgrade.toml"
 MAX_RETRIES=3
-TIMEOUT_SECONDS=120
+TIMEOUT_SECONDS=60
 
 # Prepare log file
 sudo touch "$logfile"
