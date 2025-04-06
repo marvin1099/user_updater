@@ -85,11 +85,11 @@ do
     # Cleanup: Stop `tail`, close YAD, and remove pipe
     if ps -p "$TAIL_PID" > /dev/null
     then
-        kill "$TAIL_PID"
+        kill -9 "$TAIL_PID"
     fi
     rm -f "$PIPE"
     if ps -p "$YAD_PID" > /dev/null
     then
-        kill "$YAD_PID"
+        kill -9 "$YAD_PID"
     fi
 done

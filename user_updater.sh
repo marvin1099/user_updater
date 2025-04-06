@@ -39,6 +39,6 @@ then
 fi
 
 echo "Got build user $user"
-sudo -u "$user" ./run-update.sh
+sudo -u "$user" ./run_update.sh
 
 sleep 30; ./delete_and_note_users.sh

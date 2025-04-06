@@ -32,7 +32,7 @@ for user in $(ls /home); do
     sudo -u "$user" mkdir -p "/home/$user/.config/user_updater"
 
     # Create the .desktop file for the autostart entry
-    desktop_file="/home/$user/.config/autostart/gui-report.desktop"
+    desktop_file="/home/$user/.config/autostart/gui_report.desktop"
     new_scipt_path="/home/$user/.config/user_updater/gui_report.sh"
 
     cat "$script_path" > "$new_scipt_path"
