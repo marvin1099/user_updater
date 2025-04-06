@@ -7,7 +7,7 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # List of packages to install
-deps=("git" "awk" "sudo" "topgrade" "yad")
+deps=("git" "awk" "sudo" "topgrade" "yad" "systemd")
 
 # Detect package manager
 if command -v pacman &>/dev/null; then
