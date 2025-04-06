@@ -59,7 +59,7 @@ if [[ -n "$SUDO_USER" ]]; then
         if [[ -n $g_pid ]]; then
             kill -9 $g_pid
         fi
-        sudo -u "$SUDO_USER" "$report_gui"
+        sudo -u "$SUDO_USER" "$report_gui" & disown
         systemctl start user_updater.service
     fi
 fi
