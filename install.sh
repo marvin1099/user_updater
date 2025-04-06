@@ -52,8 +52,8 @@ fi
 ./register_updater_gui.sh
 
 if [[ -n "$SUDO_USER" ]]; then
-    yad --text="Testing if Gui output is available" --no-buttons --timeout=1 --no-focus --undecorated --posx 0 --posy 0 --width=350 --height=40
     report_gui="/home/$SUDO_USER/.config/user_updater/gui_report.sh"
+    yad --text="Testing if Gui output is available" --no-buttons --timeout=1 --no-focus --undecorated --posx 0 --posy 0 --width=350 --height=40
     if [[ $? -eq 0 && -f "$report_gui" ]]; then
         sudo -u "$SUDO_USER" "$report_gui"
         systemctl start user_updater.service
