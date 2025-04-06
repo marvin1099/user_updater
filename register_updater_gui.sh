@@ -13,6 +13,7 @@ cd "$SCRIPTPATH"
 
 # Path to the script you want to register for autostart
 script_path="gui_report.sh"
+tool_updater="update_user_tools.sh"
 
 # Check if the script exists
 if [ ! -f "$script_path" ]; then
@@ -34,10 +35,15 @@ for user in $(ls /home); do
     # Create the .desktop file for the autostart entry
     desktop_file="/home/$user/.config/autostart/gui_report.desktop"
     new_scipt_path="/home/$user/.config/user_updater/gui_report.sh"
+    new_tool_updater="/home/$user/.config/user_updater/update_user_tools.sh"
 
     cat "$script_path" > "$new_scipt_path"
     chmod u+rwx "$new_scipt_path"
     chown "$user":"$user" "$new_scipt_path"
+
+    cat "$tool_updater" > "$new_tool_updater"
+    chmod u+rwx "$new_tool_updater"
+    chown "$user":"$user" "$new_tool_updater"
 
     # Ensure the desktop file is not already present
     if [ -f "$desktop_file" ]; then
