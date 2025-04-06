@@ -56,8 +56,13 @@ run_with_watchdog() {
 
         if (( diff > TIMEOUT_SECONDS )); then
             echo "Detected potential stalemate. Killing topgrade (PID $pid)..."
-            kill -9 $pid
-            wait $pid 2>/dev/null
+            sudo kill -9 $pid 2>/dev/null
+            sleep 1
+            if sudo kill -0 $pid 2>/dev/null; then
+                echo "Failed to kill topgrade (PID $pid)."
+            else
+                echo "Successfully killed stuck topgrade (PID $pid)."
+            fi
             return 1
         fi
     done
