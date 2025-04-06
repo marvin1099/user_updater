@@ -27,7 +27,8 @@ do
 
     NEWLINE=$'\n'
 
-    MARGIN=40
+    MARGIN_LEFT=100
+    MARGIN_BOTTOM=160
     WINDOW_WIDTH=600
     WINDOW_HEIGHT=400
     MONITOR_X=
@@ -45,8 +46,8 @@ do
                     MONITOR_Y=$(echo "$GEOMETRY" | cut -d'+' -f3)
                     SCREEN_WIDTH=$(echo "$GEOMETRY" | cut -d'x' -f1)
                     SCREEN_HEIGHT=$(echo "$GEOMETRY" | cut -d'x' -f2 | cut -d'+' -f1)
-                    POS_X=$((MONITOR_X + SCREEN_WIDTH - WINDOW_WIDTH - MARGIN))
-                    POS_Y=$((MONITOR_Y + SCREEN_HEIGHT - WINDOW_HEIGHT - MARGIN))
+                    POS_X=$((MONITOR_X + SCREEN_WIDTH - WINDOW_WIDTH - MARGIN_LEFT))
+                    POS_Y=$((MONITOR_Y + SCREEN_HEIGHT - WINDOW_HEIGHT - MARGIN_BOTTOM))
                 fi
             fi
         fi
