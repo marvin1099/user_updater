@@ -6,7 +6,7 @@ do
 
     # Ensure the file exists before running
     touch "$LOG_FILE"
-    chmod 777 "$logfile" 2>/dev/null
+    chmod 777 "$LOG_FILE" 2>/dev/null
 
     while [[ -z "$(cat "$LOG_FILE")" ]]
     do
@@ -27,11 +27,35 @@ do
 
     NEWLINE=$'\n'
 
+    MARGIN=40
+    WINDOW_WIDTH=600
+    WINDOW_HEIGHT=400
     while [[ -f "$LOG_FILE" ]]
     do
-        # Start YAD and feed it from the pipe
-        yad --title="UPDATE IN PROGRESS" --width=600 --height=400 --fontname="Monospace" --wrap --text="You can use your computer while the update is running, but\nDO NOT SHUTDOW THE COMPUTER.\nUPDATE IN PROGRESS:" --text-info --tail --no-buttons --fixed < "$PIPE" &
-        YAD_PID=$!
+        if command -v xrandr >/dev/null 2>&1; then
+            MONITOR_INFO=$(xrandr --current | grep " connected primary")
+            if [ -n "$MONITOR_INFO" ]; then
+                GEOMETRY=$(echo "$MONITOR_INFO" | grep -oE '[0-9]+x[0-9]+\+[0-9]+\+[0-9]+' | head -n 1)
+                if [ -n "$GEOMETRY" ]; then
+                    MONITOR_X=$(echo "$GEOMETRY" | cut -d'+' -f2)
+                    MONITOR_Y=$(echo "$GEOMETRY" | cut -d'+' -f3)
+                    SCREEN_WIDTH=$(echo "$GEOMETRY" | cut -d'x' -f1)
+                    SCREEN_HEIGHT=$(echo "$GEOMETRY" | cut -d'x' -f2 | cut -d'+' -f1)
+                    POS_X=$((MONITOR_X + SCREEN_WIDTH - WINDOW_WIDTH - MARGIN))
+                    POS_Y=$((MONITOR_Y + SCREEN_HEIGHT - WINDOW_HEIGHT - MARGIN))
+                fi
+            fi
+        fi
+        if [[ -n "$MONITOR_X" && -n "$MONITOR_Y" && -n "$SCREEN_WIDTH" && -n "$SCREEN_HEIGHT" ]]
+        then
+            # Start YAD in the bottom right and feed it from the pipe
+            yad --title="UPDATE IN PROGRESS" --posx=$POS_X --posy=$POS_Y --width=$WINDOW_WIDTH --height=$WINDOW_HEIGHT --fontname="Monospace" --wrap --text="You can use your computer while the update is running, but\nDO NOT SHUTDOW THE COMPUTER.\nUPDATE IN PROGRESS:" --text-info --tail --no-buttons --fixed < "$PIPE" &
+            YAD_PID=$!
+        else
+            # Start YAD in neutral position and feed it from the pipe
+            yad --title="UPDATE IN PROGRESS" --width=$WINDOW_WIDTH --height=$WINDOW_HEIGHT --fontname="Monospace" --wrap --text="You can use your computer while the update is running, but\nDO NOT SHUTDOW THE COMPUTER.\nUPDATE IN PROGRESS:" --text-info --tail --no-buttons --fixed < "$PIPE" &
+            YAD_PID=$!
+        fi
 
         # Monitor file existence and yad process
         while [[ -f "$LOG_FILE" ]] && ps -p "$YAD_PID" > /dev/null
@@ -41,7 +65,7 @@ do
         done
         if [[ -f "$LOG_FILE" ]]
         then
-            echo "$startmsg $(random)" > "$PIPE" &
+            echo "$startmsg $RANDOM" > "$PIPE" &
             cat "$LOG_FILE" > "$PIPE" &
         fi
     done
