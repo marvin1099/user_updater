@@ -45,7 +45,7 @@ fi
 # Function to run topgrade with monitoring
 run_with_watchdog() {
     echo "Starting topgrade attempt $1..."
-    yes | topgrade --no-retry -c > "$logfile" 2>&1 &
+    yes | topgrade --no-retry -c >> "$logfile" 2>&1 &
     pid=$!
 
     while kill -0 $pid 2>/dev/null; do
@@ -78,15 +78,15 @@ while (( attempt <= MAX_RETRIES )); do
 done
 
 echo "Topgrade system updates finished!" >> "$logfile"
-g_user=$(./find_gui_user.sh)
+g_user=$(./find_gui_user.sh | tail -1)
 if [[ -n "$g_user" ]]
 then
-    echo "Updating user tools..." > "$logfile"
-    sudo -u "$g_user" "/home/$g_user/.config/user_updater/update_user_tools.sh" > "$logfile" 2>&1
-    echo "User tool updates done" > "$logfile"
+    echo "Updating user tools..." >> "$logfile"
+    sudo -u "$g_user" "/home/$g_user/.config/user_updater/update_user_tools.sh" >> "$logfile" 2>&1
+    echo "User tool updates done" >> "$logfile"
 else
-    echo "No GUI user was found." > "$logfile"
-    echo "Skipping user tool updates" > "$logfile"
+    echo "No GUI user was found." >> "$logfile"
+    echo "Skipping user tool updates" >> "$logfile"
 fi
 
 sleep 0.5
