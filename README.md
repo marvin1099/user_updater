@@ -105,7 +105,7 @@ sudo /var/lib/user_updater/register_updater_gui.sh
 ```
 To skip the re-login fully run **AS GUI USER**:
 ```bash
-/home/$USER/.config/user_updater/gui_report.sh
+/home/$USER/.config/user_updater/gui_report.sh & disown
 ```
 
 ### File Locations & Maintenance
@@ -121,4 +121,9 @@ To skip the re-login fully run **AS GUI USER**:
 - To uninstall completely:  
   ```bash
   sudo /var/lib/user_updater/uninstall.sh
+  ```
+
+- Trigger a update manually by running:
+  ```bash
+  sudo systemctl start user_updater
   ```
