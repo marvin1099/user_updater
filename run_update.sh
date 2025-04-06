@@ -77,6 +77,17 @@ while (( attempt <= MAX_RETRIES )); do
     echo "Retrying... ($attempt/$MAX_RETRIES)"
 done
 
-echo "Topgrade finished!" >> "$logfile"
+echo "Topgrade system updates finished!" >> "$logfile"
+g_user=$(./find_gui_user.sh)
+if [[ -n "$g_user" ]]
+then
+    echo "Updating user tools..." > "$logfile"
+    sudo -u "$g_user" "/home/$g_user/.config/user_updater/update_user_tools.sh" > "$logfile" 2>&1
+    echo "User tool updates done" > "$logfile"
+else
+    echo "No GUI user was found." > "$logfile"
+    echo "Skipping user tool updates" > "$logfile"
+fi
+
 sleep 0.5
 sudo rm "$logfile"

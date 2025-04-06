@@ -1,10 +1,5 @@
 #!/bin/bash
 
-SCRIPT=$(readlink -f "$0")
-SCRIPTPATH=$(dirname "$SCRIPT")
-
-cd "$SCRIPTPATH"
-
 while true
 do
     LOG_FILE="/tmp/topgrade-report.log"  # Path to the monitored file
@@ -85,12 +80,7 @@ do
         rm "$LOG_FILE"
     fi
 
-    echo "System update finished" > "$PIPE" &
-    sleep 0.1
-    echo "Updating user tools..." > "$PIPE" &
-    sleep 0.1
-    ./update_user_tools.sh > "$PIPE" 2>&1
-    echo "Update finished, Closing" > "$PIPE" &
+    echo "Updates finished, Closing" > "$PIPE" &
     sleep 2
 
     # Cleanup: Stop `tail`, close YAD, and remove pipe
