@@ -6,8 +6,15 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-# List of packages to install
-deps=("git" "awk" "sudo" "topgrade" "yad" "systemd")
+# Map of packages and the commands they provide
+declare -A deps=(
+    [git]="git"
+    [awk]="awk"
+    [sudo]="sudo"
+    [topgrade]="topgrade"
+    [yad]="yad"
+    [systemd]="systemctl"
+)
 
 # Detect package manager
 if command -v pacman &>/dev/null; then
@@ -35,9 +42,10 @@ fi
 
 # Collect missing dependencies
 to_install=()
-for pkg in "${deps[@]}"; do
-    if command -v "$pkg" &>/dev/null; then
-        echo "$pkg is already installed. Skipping..."
+for pkg in "${!deps[@]}"; do
+    cmd="${deps[$pkg]}"
+    if command -v "$cmd" &>/dev/null; then
+        echo "$pkg ($cmd) is already installed. Skipping..."
     else
         to_install+=("$pkg")
     fi
@@ -51,9 +59,10 @@ fi
 
 # Verify installation
 err=0
-for pkg in "${deps[@]}"; do
-    if ! command -v "$pkg" &>/dev/null; then
-        echo "There was an error installing $pkg"
+for pkg in "${!deps[@]}"; do
+    cmd="${deps[$pkg]}"
+    if ! command -v "$cmd" &>/dev/null; then
+        echo "There was an error installing $pkg (expected command: $cmd)"
         err=1
     fi
 done
