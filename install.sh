@@ -57,6 +57,7 @@ if [[ -n "$SUDO_USER" ]]; then
     rep=$?
     echo "The test Gui reported a exit code of $rep"
     if [[ $rep -eq 70 && -f "$report_gui" ]]; then
+        echo "Starting the Updates"
         g_pid=$(ps aux | awk '/gui_report.sh/ && !/awk/ {if ($1 == "'$SUDO_USER'" && $11 ~ "bash" && $12 ~ "user_updater/gui_report.sh") print $2}' | head -n 1) #'
         if [[ -n $g_pid ]]; then
             kill -9 $g_pid
