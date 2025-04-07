@@ -8,6 +8,7 @@ fi
 
 SERVICE_FILE="/etc/systemd/system/user_updater.service"
 
+status=$(systemctl status user_updater 2>/dev/null | awk '/Loaded: loaded/')
 # Create systemd service file
 sudo bash -c "cat > '$SERVICE_FILE'" <<EOF
 [Unit]
@@ -29,14 +30,11 @@ EOF
 # Reload systemd to recognize the new service
 systemctl daemon-reload
 
-# Disable the service if enabled
-systemctl disable user_updater.service 2>/dev/null
-
-# Enable the service to start on boot
-systemctl enable user_updater.service
-
-# Start the service immediately
-#systemctl start user_updater.service
+# Only enable if it was not there previously
+if [[ -z "$status" ]]; then 
+    # Enable the service to start on boot
+    systemctl enable user_updater.service
+fi
 
 echo "Service user_updater has been created"
 
