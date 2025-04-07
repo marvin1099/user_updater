@@ -7,8 +7,10 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 SERVICE_FILE="/etc/systemd/system/user_updater.service"
+if [[ -f "$SERVICE_FILE" ]]; then
+    status=1
+fi
 
-status=$(systemctl status user_updater 2>/dev/null | awk '/Loaded: loaded/')
 # Create systemd service file
 sudo bash -c "cat > '$SERVICE_FILE'" <<EOF
 [Unit]
