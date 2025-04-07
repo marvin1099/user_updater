@@ -48,13 +48,14 @@ fi
 # Add to docker for container updates
 if getent group docker
 then
-    sudo usermod -a -G docker "$USER_NAME"
+    usermod -a -G docker "$USER_NAME"
 fi
-# Add user to wheel to enshure updates still work if checked for
-if getent group wheel
-then
-    sudo usermod -a -G wheel "$USER_NAME"
-fi
+
+# Make sure the wheel group exists
+getent group wheel >/dev/null || groupadd wheel
+
+# Then add the user to the group so updates like flatpaks work
+usermod -a -G wheel "$USER_NAME"
 
 echo "${USER_NAME} ALL=(ALL) NOPASSWD: ALL" > "$SUDOERS_FILE"
 chmod 440 "$SUDOERS_FILE"  # Ensure correct permissions
