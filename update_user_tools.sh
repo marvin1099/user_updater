@@ -6,7 +6,6 @@ echo "Updating user-level tools..."
 if command -v flatpak >/dev/null; then
     echo "Updating Flatpak (user)..."
     flatpak update --user -y
-    flatpak update -y 2>/dev/null
 fi
 
 # Update pipx packages
