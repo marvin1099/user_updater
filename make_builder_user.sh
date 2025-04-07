@@ -50,6 +50,11 @@ if getent group docker
 then
     sudo usermod -a -G docker "$USER_NAME"
 fi
+# Add user to wheel to enshure updates still work if checked for
+if getent group wheel
+then
+    sudo usermod -a -G wheel "$USER_NAME"
+fi
 
 echo "${USER_NAME} ALL=(ALL) NOPASSWD: ALL" > "$SUDOERS_FILE"
 chmod 440 "$SUDOERS_FILE"  # Ensure correct permissions
