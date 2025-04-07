@@ -17,6 +17,7 @@ config_file="user_updater.conf"
 declare -A entrys=(
     ["self update"]="true # This makes the script update itself"
     ["forced self update"]="true # This will force a update even if local changes are incompatible"
+    ["reactivate service file"]="true # If this is enabled the sytemd service will be reactivated after update"
 )
 
 touch "$config_file"
@@ -58,6 +59,7 @@ for i in $(seq 1 2); do
             case "$no_space_key" in
                 "selfupdate") up=1 ;;
                 "forcedselfupdate") fup=1 ;;
+                "reactivateservicefile") rsf=1 ;;
             esac
         fi
     done < "$config_file"
@@ -102,6 +104,12 @@ then
 fi
 if [[ -n $up ]]
 then
+    if [[ -n $rsf ]]; then
+        SERVICE_FILE="/etc/systemd/system/user_updater.service"
+        if [[ -f "$SERVICE_FILE" ]]; then
+            rm -f "$SERVICE_FILE"
+        fi
+    fi
     # Make shure no sudo user is set to avid dobble updates and or infinite loops
     export SUDO_USER=
     ./install.sh
