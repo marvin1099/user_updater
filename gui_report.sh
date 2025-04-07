@@ -54,11 +54,11 @@ do
         if [[ -n "$MONITOR_X" && -n "$MONITOR_Y" && -n "$SCREEN_WIDTH" && -n "$SCREEN_HEIGHT" ]]
         then
             # Start YAD in the bottom right and feed it from the pipe
-            yad --title="UPDATE IN PROGRESS" --posx=$POS_X --posy=$POS_Y --width=$WINDOW_WIDTH --height=$WINDOW_HEIGHT --fontname="Monospace" --wrap --text="You can use your computer while the update is running, but\nDO NOT SHUTDOW THE COMPUTER.\nUPDATE IN PROGRESS:" --text-info --tail --no-buttons --fixed < "$PIPE" &
+            yad --title="UPDATE IN PROGRESS" --posx=$POS_X --posy=$POS_Y --width=$WINDOW_WIDTH --height=$WINDOW_HEIGHT --fontname="Monospace" --wrap --text="You can use your computer while the update is running, but\nDO NOT SHUTDOW THE COMPUTER.\nUPDATE IN PROGRESS:" --text-info --tail --no-buttons --no-focus --fixed < "$PIPE" &
             YAD_PID=$!
         else
             # Start YAD in neutral position and feed it from the pipe
-            yad --title="UPDATE IN PROGRESS" --width=$WINDOW_WIDTH --height=$WINDOW_HEIGHT --fontname="Monospace" --wrap --text="You can use your computer while the update is running, but\nDO NOT SHUTDOW THE COMPUTER.\nUPDATE IN PROGRESS:" --text-info --tail --no-buttons --fixed < "$PIPE" &
+            yad --title="UPDATE IN PROGRESS" --width=$WINDOW_WIDTH --height=$WINDOW_HEIGHT --fontname="Monospace" --wrap --text="You can use your computer while the update is running, but\nDO NOT SHUTDOW THE COMPUTER.\nUPDATE IN PROGRESS:" --text-info --tail --no-buttons --no-focus --fixed < "$PIPE" &
             YAD_PID=$!
         fi
 
