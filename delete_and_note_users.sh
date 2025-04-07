@@ -41,5 +41,7 @@ rm "$BUsers.t"
 
 for var in "$@"
 do
-    echo "$var" >> "$BUsers"
+    if [[ -n "$var" ]]; then
+        echo "$var" >> "$BUsers"
+    fi
 done

@@ -11,7 +11,7 @@ SCRIPTPATH=$(dirname "$SCRIPT")
 
 cd "$SCRIPTPATH"
 
-./register_updater_gui.sh
+./self_update.sh
 
 # Get builder user
 builder_usernames="builder_usernames.txt"
