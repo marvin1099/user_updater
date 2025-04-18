@@ -69,6 +69,9 @@ run_with_watchdog() {
     return 0
 }
 
+# Get the gui user, if any for later
+g_user=$(timeout 30 ./find_gui_user.sh | tail -1) # This is here to enshure the user is logged in
+
 # Try with retries
 attempt=1
 while (( attempt <= MAX_RETRIES )); do
@@ -78,7 +81,8 @@ while (( attempt <= MAX_RETRIES )); do
 done
 
 echo "Topgrade system updates finished!" >> "$logfile"
-g_user=$(./find_gui_user.sh | tail -1)
+
+# If there was a gui user update their tools
 if [[ -n "$g_user" ]]
 then
     echo "Updating user tools..." >> "$logfile"
