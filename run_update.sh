@@ -69,8 +69,17 @@ run_with_watchdog() {
     return 0
 }
 
+# Wait for any user to login except root
+while true; do
+  if who | awk '{ if ($1 != "root") print $1 }' | head -1; then
+    echo "User detected. Proceeding..."
+    break
+  fi
+  sleep 5
+done
+
 # Get the gui user, if any for later
-g_user=$(timeout 60 ./find_gui_user.sh | tail -1) # This is here to enshure the user is logged in
+g_user=$(timeout 30 ./find_gui_user.sh | tail -1) # This is here to enshure the user is logged in
 if [[ -n "$g_user" ]]
 then
     sleep 10 # start 10 seconds after the user is logged in
@@ -88,7 +97,7 @@ echo "Topgrade system updates finished!" >> "$logfile"
 
 if [[ -z "$g_user" ]]
 then
-    g_user=$(timeout 30 ./find_gui_user.sh | tail -1)
+    g_user=$(who | awk '{ if ($1 != "root") print $1 }' | head -1) #'
 fi
 
 # If there was a gui user update their tools
@@ -98,7 +107,7 @@ then
     sudo -u "$g_user" "/home/$g_user/.config/user_updater/update_user_tools.sh" >> "$logfile" 2>&1
     echo "User tool updates done" >> "$logfile"
 else
-    echo "No GUI user was found." >> "$logfile"
+    echo "No logged in user was found." >> "$logfile"
     echo "Skipping user tool updates" >> "$logfile"
 fi
 
