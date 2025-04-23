@@ -51,7 +51,7 @@ Your **user password** will be requested during installation.
 If you **don’t have sudo yet**, use this command instead — it installs sudo and installs the tool:
 
 ```bash
-cd /tmp && curl -fsS https://codeberg.org/marvin1099/user_updater/raw/branch/main/get_dependencies.sh -o get_dependencies.sh && chmod +x get_dependencies.sh && su -c "./get_dependencies.sh" && curl -fsS https://codeberg.org/marvin1099/user_updater/raw/branch/main/install.sh | sudo bash; rm -f get_dependencies.sh
+curl -fsS https://codeberg.org/marvin1099/user_updater/raw/branch/main/get_dependencies.sh -o /tmp/get_dependencies.sh && chmod +x /tmp/get_dependencies.sh && su -c "/tmp/get_dependencies.sh" && curl -fsS https://codeberg.org/marvin1099/user_updater/raw/branch/main/install.sh | sudo bash; rm -f /tmp/get_dependencies.sh
 ```
 
 Here, the **root password** will be required,  
