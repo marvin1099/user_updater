@@ -5,10 +5,7 @@ do
     LOG_FILE="/tmp/topgrade-report.log"  # Path to the monitored file
 
     # Ensure the file exists before running
-    touch "$LOG_FILE"
-    chmod 777 "$LOG_FILE" 2>/dev/null
-
-    while [[ -z "$(cat "$LOG_FILE")" ]]
+    while [[ ! -f "$LOG_FILE" ]] || [[ -z "$(cat "$LOG_FILE" 2>/dev/null)" ]]
     do
         sleep 1
     done
@@ -72,25 +69,20 @@ do
         then
             echo "$startmsg $RANDOM" > "$PIPE" &
             cat "$LOG_FILE" > "$PIPE" &
+            sleep 0.5
         fi
+        kill -9 "$YAD_PID" > /dev/null 2>&1
     done
 
-    if [[ -f "$LOG_FILE" ]]
-    then
-        rm "$LOG_FILE"
-    fi
+    rm "$LOG_FILE" > /dev/null 2>&1
 
     echo "Updates finished, Closing" > "$PIPE" &
     sleep 2
 
     # Cleanup: Stop `tail`, close YAD, and remove pipe
-    if ps -p "$TAIL_PID" > /dev/null
-    then
-        kill -9 "$TAIL_PID"
-    fi
+    kill -9 "$TAIL_PID" > /dev/null 2>&1
+
     rm -f "$PIPE"
-    if ps -p "$YAD_PID" > /dev/null
-    then
-        kill -9 "$YAD_PID"
-    fi
+
+    kill -9 "$YAD_PID" > /dev/null 2>&1
 done
