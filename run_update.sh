@@ -47,6 +47,7 @@ run_with_watchdog() {
     echo "Starting topgrade attempt $1..."
     yes | topgrade --no-retry -c >> "$logfile" 2>&1 &
     pid=$!
+    msg_nr=0
 
     while kill -0 $pid 2>/dev/null; do
         sleep 10
@@ -55,15 +56,41 @@ run_with_watchdog() {
         diff=$((now - last_modified))
 
         if (( diff > TIMEOUT_SECONDS )); then
-            echo "Detected potential stalemate. Killing topgrade (PID $pid)..."
-            sudo kill -9 $pid 2>/dev/null
-            sleep 1
-            if sudo kill -0 $pid 2>/dev/null; then
-                echo "Failed to kill topgrade (PID $pid)."
+            if [[ $1 -eq $MAX_RETRIES ]]; then
+                msg_nr=$((msg_nr + 1))
+                if [[ $msg_nr -eq 1 ]]; then
+                    echo "" >> "$logfile"
+                    echo "The update seems to take longer then expected" >> "$logfile"
+                    echo "If this message keeps showing up you may need to manually update" >> "$logfile"
+                    echo "" >> "$logfile"
+                elif [[ $msg_nr -eq 10 ]]; then
+                    echo "" >> "$logfile"
+                    echo "The update is still not finished please consider manually updating" >> "$logfile"
+                    echo "" >> "$logfile"
+                elif [[ $msg_nr -eq 20 ]]; then
+                    echo "" >> "$logfile"
+                    echo "The update won't seem to finsh, START A MANUAL UPDATE" >> "$logfile"
+                    echo "If you don not know how to update manually ask you system admin or websearch:" >> "$logfile"
+                    name=$(cat /etc/os-release | awk -F'NAME=' '/NAME/ {print substr($2,2,length($2)-2)}' | head -1) #' 
+                    echo "How to update $name in the terminal" >> "$logfile"
+                    echo "Then open you terminal an paste the command you found online and hit enter" >> "$logfile"
+                    echo "You may need to enter you password enter to start the installation and confirm by pressing Y and Enter" >> "$logfile"
+                    echo "Reboot after the manual update is done" >> "$logfile"
+                    echo "" >> "$logfile"
+                elif [[ $msg_nr -gt 28 ]]; then
+                    msg_nr=19
+                fi
             else
-                echo "Successfully killed stuck topgrade (PID $pid)."
+                echo "Detected potential stalemate. Killing topgrade (PID $pid)..."
+                sudo kill -9 $pid 2>/dev/null
+                sleep 1
+                if sudo kill -0 $pid 2>/dev/null; then
+                    echo "Failed to kill topgrade (PID $pid)."
+                else
+                    echo "Successfully killed stuck topgrade (PID $pid)."
+                fi
+                return 1
             fi
-            return 1
         fi
     done
     return 0
