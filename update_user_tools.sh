@@ -65,3 +65,4 @@ if command -v gem >/dev/null; then
 fi
 
 log "Done updating user-level tools!"
+log ""

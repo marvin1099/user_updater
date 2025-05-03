@@ -18,42 +18,57 @@ log() {
 }
 echo "$loginfo" | tail -n +2
 
+log "Seting builder usernames storage file"
 BUsers="/var/lib/user_updater/builder_usernames.txt"
 
+log "Makeing the parrent directory of the usernames storage file"
 mkdir -p "$(dirname $BUsers)"
+
+log "Createing builder usernames file \"$BUsers\""
 touch "$BUsers"
 
+log "Reading the file line by line and delete any found user"
 while read -r p; do
     if [[ -n $p ]]
     then
-        #echo "Checking for user $p"
+        log "Checking for user \"$p\""
         if id "$p" &>/dev/null
         then
+            log "Found user. Deleting..."
             userdel -f -r "$p"
         fi
 
         HomeDir="/tmp/$p"
         #echo $HomeDir
+        log "Checking for home directory \"$HomeDir\""
         if [[ -d "$HomeDir" ]]
         then
+            log "Found home directory. Deleting..."
             rm -r "$HomeDir"
         fi
 
         RM_SUDOERS_FILE="/etc/sudoers.d/${p/./\-}"
+        log "Checking for sudoers file \"$RM_SUDOERS_FILE\""
         if [[ -f "$RM_SUDOERS_FILE" ]]
         then
+            log "Found sudoers file. Deleting..."
             rm "$RM_SUDOERS_FILE"
         fi
     fi
 done < "$BUsers"
+log "Deleting builder usernames file"
 rm "$BUsers"
-touch "$BUsers.t"
-cp "$BUsers.t" "$BUsers"
-rm "$BUsers.t"
+log "Touching builder usernames file"
+touch "$BUsers"
 
+log "Adding given arguments as users to builder usernames file"
 for var in "$@"
 do
     if [[ -n "$var" ]]; then
+        log "Got user \"$var\""
+        log "Adding user to builder usernames file"
         echo "$var" >> "$BUsers"
     fi
 done
+log "Finished deleting builders and noting new ones"
+log ""

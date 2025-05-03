@@ -101,6 +101,7 @@ if [ ${#to_install[@]} -gt 0 ]; then
         echo "Install these manually"
         echo "Can't continue without dependencies"
         echo "Exiting..."
+        exit 1
     fi
 else
     log "No need to install packages, all packages where detected"

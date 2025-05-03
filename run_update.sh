@@ -30,8 +30,10 @@ sudo chown "$USER":"$USER" "$HOME/.config"
 sudo chmod u+rwx "$HOME/.config"
 
 # Generate config if missing
-log "Trying to generate the config \"$uptoml\""
-timeout 1 topgrade --edit-config > /dev/null 2>&1
+log "Generating the topgrade config \"$uptoml\""
+if [[ ! -f "$uptoml" ]]; then
+    topgrade --config-reference > \"$uptoml\"
+fi
 sudo touch "$uptoml"
 sudo chown "$USER":"$USER" "$uptoml"
 sudo chmod u+rwx "$uptoml"
@@ -67,7 +69,7 @@ fi
 # Function to run topgrade with monitoring
 run_with_watchdog() {
     log "Starting topgrade attempt $1..."
-    yes | topgrade --no-retry -c >> "$logfile" 2>&1 &
+    yes | topgrade --cleanup --no-retry >> "$logfile" 2>&1 &
     pid=$!
     msg_nr=0
     divider=1
@@ -84,8 +86,7 @@ run_with_watchdog() {
                 if [[ $msg_nr -eq 1 ]]; then
                     ms=$'\n'"The update seems to take longer then expected"
                     ms+=$'\n'"If this message keeps showing up you may need to manually update"$'\n'
-                    echo "$ms" >> "$logfile"
-                    log "$ms"
+                    log "$ms" | tee -a "$logfile"
                     divider=2
                 elif [[ $msg_nr -eq 2 ]] || [[ $msg_nr -eq 3 ]]; then
                     ms=$'\n'"The update won't seem to finsh, START A MANUAL UPDATE"
@@ -140,6 +141,10 @@ log "$(echo "$fg_user" | head -n -1)"
 if [[ -n "$g_user" ]] && [[ "$cg_user" == 0 ]]; then
     log "Found gui user \"$g_user\", starting update in 20 seconds"
     sleep 20 # start 20 seconds after the user is logged in
+else
+    log "GUI User not found"
+    log "Using last logged in user"
+    g_user="$u"
 fi
 
 # Try with retries
@@ -151,15 +156,7 @@ while (( attempt <= MAX_RETRIES )); do
     log "Retrying... ($attempt/$MAX_RETRIES)"
 done
 
-ms="Topgrade system updates finished!"
-echo "$ms" >> "$logfile"
-log "$ms"
-
-if [[ -z "$g_user" ]]
-then
-    log "Rechecking for previusly skipped gui user gathering"
-    g_user=$(who | awk '{ if ($1 != "root") print $1 }' | head -1)
-fi
+log "Topgrade system updates finished!" | tee -a "$logfile"
 
 # If there was a gui user update their tools
 if [[ -n "$g_user" ]]
@@ -167,18 +164,14 @@ then
     log "Got \"$g_user\", updating their user tools"
     echo "Updating user tools..." >> "$logfile"
     sudo -u "$g_user" "/home/$g_user/.config/user_updater/update_user_tools.sh" 2>&1 | tee -a "$logfile" > /dev/null
-    ms="User tool updates done"
-    echo "$ms" >> "$logfile"
-    log "$ms"
+    log "User tool updates done" | tee -a "$logfile"
 else
-    ms="No logged in user was found"
-    log "$ms"
-    echo "$ms" >> "$logfile"
-    ms="Skipping user tool updates"
-    log "$ms"
-    echo "$ms" >> "$logfile"
+    log "No logged in user was found" | tee -a "$logfile"
+    log "Skipping user tool updates" | tee -a "$logfile"
 fi
 
 log "Removing Logfile"
 sleep 0.5
 sudo rm "$logfile"
+log "Finished all updates and cleanup"
+log ""
