@@ -45,8 +45,6 @@ fi
 
 log "Checking if the repo was cloned to the install directory \"$install_dir\""
 git=0
-cd "$install_dir"
-cd_ret=$?
 cd "$install_dir" && {
     if git rev-parse --is-inside-work-tree 2> /dev/null
     then
