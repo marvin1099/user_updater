@@ -38,12 +38,7 @@ if [[ -f "get_dependencies.sh" ]] && [[ "$(pwd)" != "$install_dir" ]]
 then
     log "Found install directory and dependencies script"
     log "Starting dependencies install script"
-    ./get_dependencies.sh
-    retu_dep=$?
-    if [[ "$retu_dep" -eq 0 ]]
-    then
-        deps=1
-    fi
+    ./get_dependencies.sh && deps=1
 else
     log "Install directory not present or dependencies install script not found"
 fi
@@ -52,8 +47,7 @@ log "Checking if the repo was cloned to the install directory \"$install_dir\""
 git=0
 cd "$install_dir"
 cd_ret=$?
-if [[ "$cd_ret" -eq 0 ]]
-then
+cd "$install_dir" && {
     if git rev-parse --is-inside-work-tree 2> /dev/null
     then
         log "Trying to pull git update"
@@ -62,9 +56,9 @@ then
     else
         log "No git repo found in install directory"
     fi
-else
+} || {
     log "Install directory not present"
-fi
+}
 
 log "Navigating to parrent of install directory"
 cd "$(dirname "$install_dir")" || exit 1
@@ -79,7 +73,7 @@ then
         then
             log "Error downloading the repo from both sources. Exiting..."
             sleep 1
-           cd "$SCRIPTPATH" || exit 1
+            exit 1
         fi
     fi
 fi
@@ -90,12 +84,7 @@ cd "$install_dir" || exit 1
 
 if [[ -z "$deps" ]]; then
     log "Starting dependencies install script"
-    ./get_dependencies.sh
-    retu_dep=$?
-    if [[ "$retu_dep" -eq 0 ]]
-    then
-       cd "$SCRIPTPATH" || exit 1
-    fi
+    ./get_dependencies.sh || exit 1
 fi
 
 log "Registering systemd services..."

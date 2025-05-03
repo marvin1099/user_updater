@@ -65,7 +65,6 @@ elif command -v pkg &>/dev/null; then
     PKG_MANAGER="pkg install -y"
 else
     log "Unsupported package manager. Please install manually."
-   cd "$SCRIPTPATH" || exit 1
 fi
 log "Using package manager command \"$PKG_MANAGER\""
 
@@ -101,7 +100,6 @@ if [ ${#to_install[@]} -gt 0 ]; then
         echo "Install these manually"
         echo "Can't continue without dependencies"
         echo "Exiting..."
-       cd "$SCRIPTPATH" || exit 1
     fi
 else
     log "No need to install packages, all packages where detected"
