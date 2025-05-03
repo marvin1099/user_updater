@@ -3,7 +3,7 @@
 # Ensure the script is run as root
 if [ "$EUID" -ne 0 ]; then
     echo "This script must be run as root. Exiting."
-    exit 1
+   cd "$SCRIPTPATH" || exit 1
 fi
 
 # Admin log setup
@@ -11,7 +11,8 @@ log_dir="/var/lib/user_updater/logs"
 mkdir -p "$log_dir"
 chmod a+wr "$log_dir"
 if [[ -z "$UUPDATER_IDATE" ]]; then
-    export UUPDATER_IDATE="$(date '+%F_%H-%M-%S')"
+    UUPDATER_IDATE="$(date '+%F_%H-%M-%S')"
+    export UUPDATER_IDATE
     uuset=1
 fi
 if [[ -z "$UUPDATER_ACTION" ]]; then
@@ -64,7 +65,7 @@ elif command -v pkg &>/dev/null; then
     PKG_MANAGER="pkg install -y"
 else
     log "Unsupported package manager. Please install manually."
-    exit 1
+   cd "$SCRIPTPATH" || exit 1
 fi
 log "Using package manager command \"$PKG_MANAGER\""
 
@@ -100,7 +101,7 @@ if [ ${#to_install[@]} -gt 0 ]; then
         echo "Install these manually"
         echo "Can't continue without dependencies"
         echo "Exiting..."
-        exit 1
+       cd "$SCRIPTPATH" || exit 1
     fi
 else
     log "No need to install packages, all packages where detected"

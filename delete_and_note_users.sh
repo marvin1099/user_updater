@@ -3,27 +3,27 @@
 # Ensure the script is run as root
 if [ "$EUID" -ne 0 ]; then
     echo "This script must be run as root. Exiting."
-    exit 1
+   cd "$SCRIPTPATH" || exit 1
 fi
 
-SCRIPT=$(readlink -f $0)
+SCRIPT=$(readlink -f "$0")
 SCRIPTPATH=$(dirname "$SCRIPT")
 
-cd "$SCRIPTPATH"
+cd "$SCRIPTPATH" || exit 1
 
 loginfo=$(./main_logger.sh "" "Delete old build users" "Self Update" "selfupdate")
 admin_log="$(echo "$loginfo" | head -1)"
 log() {
     echo "$1" | tee -a "$admin_log"
 }
-echo "$(echo "$loginfo" | tail -n +2)"
+echo "$loginfo" | tail -n +2
 
 BUsers="/var/lib/user_updater/builder_usernames.txt"
 
 mkdir -p "$(dirname $BUsers)"
 touch "$BUsers"
 
-while read p; do
+while read -r p; do
     if [[ -n $p ]]
     then
         #echo "Checking for user $p"

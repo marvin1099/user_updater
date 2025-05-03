@@ -3,7 +3,7 @@
 # Ensure the script is run as root
 if [ "$EUID" -ne 0 ]; then
     echo "This script must be run as root. Exiting."
-    exit 1
+   cd "$SCRIPTPATH" || exit 1
 fi
 
 # Admin log setup
@@ -11,7 +11,8 @@ log_dir="/var/lib/user_updater/logs"
 mkdir -p "$log_dir"
 chmod a+wr "$log_dir"
 if [[ -z "$UUPDATER_IDATE" ]]; then
-    export UUPDATER_IDATE="$(date '+%F_%H-%M-%S')"
+    UUPDATER_IDATE="$(date '+%F_%H-%M-%S')"
+    export UUPDATER_IDATE
     uuset=1
 fi
 if [[ -z "$UUPDATER_ACTION" ]]; then
@@ -38,7 +39,8 @@ then
     log "Found install directory and dependencies script"
     log "Starting dependencies install script"
     ./get_dependencies.sh
-    if [[ $? -eq 0 ]]
+    retu_dep=$?
+    if [[ "$retu_dep" -eq 0 ]]
     then
         deps=1
     fi
@@ -49,7 +51,8 @@ fi
 log "Checking if the repo was cloned to the install directory \"$install_dir\""
 git=0
 cd "$install_dir"
-if [[ $? -eq 0 ]]
+cd_ret=$?
+if [[ "$cd_ret" -eq 0 ]]
 then
     if git rev-parse --is-inside-work-tree 2> /dev/null
     then
@@ -64,7 +67,7 @@ else
 fi
 
 log "Navigating to parrent of install directory"
-cd "$(dirname "$install_dir")"
+cd "$(dirname "$install_dir")" || exit 1
 
 if [[ $git -eq 0 ]]
 then
@@ -76,21 +79,22 @@ then
         then
             log "Error downloading the repo from both sources. Exiting..."
             sleep 1
-            exit 1
+           cd "$SCRIPTPATH" || exit 1
         fi
     fi
 fi
 log "Success cloning user_updater repository"
 
 log "Navigating to install directory"
-cd "$install_dir"
+cd "$install_dir" || exit 1
 
 if [[ -z "$deps" ]]; then
     log "Starting dependencies install script"
     ./get_dependencies.sh
-    if [[ $? -ne 0 ]]
+    retu_dep=$?
+    if [[ "$retu_dep" -eq 0 ]]
     then
-        exit 1
+       cd "$SCRIPTPATH" || exit 1
     fi
 fi
 
@@ -111,10 +115,10 @@ if [[ -n "$SUDO_USER" ]]; then
     log "The test GUI reported an exit code of $rep"
     if [[ $rep -eq 70 && -f "$report_gui" ]]; then
         log "GUI test successful. Preparing to start updates..."
-        g_pid=$(ps aux | awk '/gui_report.sh/ && !/awk/ {if ($1 == "'$SUDO_USER'" && $11 ~ "bash" && $12 ~ "user_updater/gui_report.sh") print $2}' | head -n 1) #'
+        g_pid=$(ps aux | awk '/gui_report.sh/ && !/awk/ {if ($1 == "'"$SUDO_USER"'" && $11 ~ "bash" && $12 ~ "user_updater/gui_report.sh") print $2}' | head -n 1)
         if [[ -n $g_pid ]]; then
             log "Killing existing gui_report.sh process (PID: $g_pid)..."
-            kill -9 $g_pid
+            kill -9 "$g_pid"
         fi
         log "Launching new gui_report.sh process for $SUDO_USER..."
         sudo -u "$SUDO_USER" "$report_gui" & disown

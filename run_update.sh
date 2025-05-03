@@ -1,16 +1,16 @@
 #!/bin/bash
 
-SCRIPT=$(readlink -f $0)
+SCRIPT=$(readlink -f "$0")
 SCRIPTPATH=$(dirname "$SCRIPT")
 
-cd "$SCRIPTPATH"
+cd "$SCRIPTPATH" || exit 1
 
 loginfo=$(sudo ./main_logger.sh "" "Updater" "Updater" "update" "selfupdate" "install")
 admin_log="$(echo "$loginfo" | head -1)"
 log() {
     echo "$1" | sudo tee -a "$admin_log"
 }
-echo "$(echo "$loginfo" | tail -n +2)"
+echo "$loginfo" | tail -n +2
 
 logfile="/tmp/topgrade-report.log"
 uptoml="$HOME/.config/topgrade.toml"
@@ -39,11 +39,11 @@ sudo chmod u+rwx "$uptoml"
 # Enable assume_yes in config
 log "Setting \"assume_yes\" to \"true\" in config"
 misc=0
-if cat "$uptoml" | grep "[misc]" > /dev/null; then
+if grep "[misc]" "$uptoml" > /dev/null; then
     log "The \"[misc]\" section was found in config"
     misc=1
 fi
-if cat "$uptoml" | grep "assume_yes =" > /dev/null; then
+if grep "assume_yes =" "$uptoml" > /dev/null; then
     log "String \"assume_yes\" was found in config"
     if [[ $misc -eq 1 ]]
     then
@@ -90,7 +90,7 @@ run_with_watchdog() {
                 elif [[ $msg_nr -eq 2 ]] || [[ $msg_nr -eq 3 ]]; then
                     ms=$'\n'"The update won't seem to finsh, START A MANUAL UPDATE"
                     ms+=$'\n'"If you don not know how to update manually ask you system admin or websearch:"
-                    name=$(cat /etc/os-release | awk -F'NAME=' '/NAME/ {print substr($2,2,length($2)-2)}' | head -1) #' 
+                    name=$(awk -F'NAME=' '/NAME/ {print substr($2,2,length($2)-2)}' /etc/os-release | head -1)
                     ms+=$'\n'"How to update $name in the terminal"
                     ms+=$'\n'"Then open you terminal an paste the command you found online and hit enter"
                     ms+=$'\n'"You may need to enter you password enter to start the installation and confirm by pressing Y and Enter"
@@ -158,7 +158,7 @@ log "$ms"
 if [[ -z "$g_user" ]]
 then
     log "Rechecking for previusly skipped gui user gathering"
-    g_user=$(who | awk '{ if ($1 != "root") print $1 }' | head -1) #'
+    g_user=$(who | awk '{ if ($1 != "root") print $1 }' | head -1)
 fi
 
 # If there was a gui user update their tools
@@ -166,7 +166,7 @@ if [[ -n "$g_user" ]]
 then
     log "Got \"$g_user\", updating their user tools"
     echo "Updating user tools..." >> "$logfile"
-    sudo -u "$g_user" "/home/$g_user/.config/user_updater/update_user_tools.sh" >> "$logfile" 2>&1
+    sudo -u "$g_user" "/home/$g_user/.config/user_updater/update_user_tools.sh" 2>&1 | tee -a "$logfile" > /dev/null
     ms="User tool updates done"
     echo "$ms" >> "$logfile"
     log "$ms"

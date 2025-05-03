@@ -24,7 +24,8 @@ fi
 mkdir -p "$log_dir"
 chmod a+wr "$log_dir"
 if [[ -z "$UUPDATER_IDATE" ]]; then
-    export UUPDATER_IDATE="$(date '+%F_%H-%M-%S')"
+    UUPDATER_IDATE="$(date '+%F_%H-%M-%S')"
+    export UUPDATER_IDATE
     uuset=1
 fi
 if [[ -z "$UUPDATER_ACTION" ]] || [[ "$UUPDATER_ACTION" == "$onf_action" ]] || [[ "$UUPDATER_ACTION" == "$ons_action" ]] || [[ "$onf_action" == "*" ]]

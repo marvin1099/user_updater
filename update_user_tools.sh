@@ -1,16 +1,16 @@
 #!/bin/bash
 
-SCRIPT=$(readlink -f $0)
+SCRIPT=$(readlink -f "$0")
 SCRIPTPATH=$(dirname "$SCRIPT")
 
-cd "$SCRIPTPATH"
+cd "$SCRIPTPATH" || exit 1
 
 loginfo=$(./main_logger.sh "" "User Tool Updater" "User Updater" "${USER}update" "*")
 admin_log="$(echo "$loginfo" | head -1)"
 log() {
     echo "$1" | sudo tee -a "$admin_log"
 }
-echo "$(echo "$loginfo" | tail -n +2)"
+echo "$loginfo" | tail -n +2
 
 log "Updating user-level tools..."
 

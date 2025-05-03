@@ -3,45 +3,20 @@
 # Ensure the script is run as root
 if [ "$EUID" -ne 0 ]; then
     echo "This script must be run as root. Exiting."
-    exit 1
+   cd "$SCRIPTPATH" || exit 1
 fi
-
-# Admin log setup
-log_dir="/var/lib/user_updater/logs"
-mkdir -p "$log_dir"
-chmod a+wr "$log_dir"
-if [[ -z "$UUPDATER_IDATE" ]]; then
-    export UUPDATER_IDATE="$(date '+%F_%H-%M-%S')"
-    uuset=1
-fi
-if [[ -z "$UUPDATER_ACTION" ]] || [[ "$UUPDATER_ACTION" == "install" ]]; then
-    export UUPDATER_ACTION="selfupdate"
-fi
-admin_log="$log_dir/${UUPDATER_IDATE}_$UUPDATER_ACTION.log"
-touch "$admin_log"
-chmod 664 "$admin_log"
-log() {
-    echo "$1" | tee -a "$admin_log"
-}
-if [[ -z "$uuset" ]]; then
-    echo "Logs are saved to \"$log_dir\""
-    log "Starting Self Update log at $UUPDATER_IDATE"
-else
-    log ""
-fi
-log "Starting  script"
 
 SCRIPT=$(readlink -f "$0")
 SCRIPTPATH=$(dirname "$SCRIPT")
 
-cd "$SCRIPTPATH"
+cd "$SCRIPTPATH" || exit 1
 
 loginfo=$(./main_logger.sh "" "Main Update" "Self Update" "selfupdate" "install")
 admin_log="$(echo "$loginfo" | head -1)"
 log() {
     echo "$1" | tee -a "$admin_log"
 }
-echo "$(echo "$loginfo" | tail -n +2)"
+echo "$loginfo" | tail -n +2
 
 log "Running self update"
 ./self_update.sh
@@ -50,7 +25,7 @@ log "Getting builder users"
 # Get builder user
 builder_usernames="builder_usernames.txt"
 err=0
-while read j
+while read -r j
 do
     if [[ -n "$j" ]]
     then

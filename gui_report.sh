@@ -1,16 +1,16 @@
 #!/bin/bash
 
-SCRIPT=$(readlink -f $0)
+SCRIPT=$(readlink -f "$0")
 SCRIPTPATH=$(dirname "$SCRIPT")
 
-cd "$SCRIPTPATH"
+cd "$SCRIPTPATH" || exit 1
 
 loginfo=$(./main_logger.sh "" "Updater GUI" "User Updater" "${USER}update" "*")
 admin_log="$(echo "$loginfo" | head -1)"
 log() {
     echo "$1" | sudo tee -a "$admin_log"
 }
-echo "$(echo "$loginfo" | tail -n +2)"
+echo "$loginfo" | tail -n +2
 
 log "Setting monitored file"
 LOG_FILE="/tmp/topgrade-report.log"  # Path to the monitored file
@@ -35,7 +35,7 @@ do
     echo "$startmsg" | tee "$PIPE" >> "$PERM_LOG" &
     log "Coping the file into the pipe and to permanent storage"
     log "Also Starting tail to write live updates into the pipe and to permanent storage"
-    cat "$LOG_FILE" | tee "$PIPE" >> "$PERM_LOG" &
+    tee "$PIPE" < "$LOG_FILE" >> "$PERM_LOG" &
 
     # Start tail in the background
     tail -n 0 -f "$LOG_FILE" | tee "$PIPE" >> "$PERM_LOG" &
@@ -79,13 +79,13 @@ do
             log "Detected successfully calulated window position"
             log "Starting yad in the correct window position"
             # Start YAD in the bottom right and feed it from the pipe
-            yad --title="UPDATE IN PROGRESS" --posx=$POS_X --posy=$POS_Y --width=$WINDOW_WIDTH --height=$WINDOW_HEIGHT --fontname="Monospace" --wrap --text="You can use your computer while the update is running, but\nDO NOT SHUTDOW THE COMPUTER.\nUPDATE IN PROGRESS:" --text-info --tail --no-buttons --no-focus --fixed < "$PIPE" &
+            yad --title="UPDATE IN PROGRESS" --posx="$POS_X" --posy="$POS_Y" --width="$WINDOW_WIDTH" --height="$WINDOW_HEIGHT" --fontname="Monospace" --wrap --text="You can use your computer while the update is running, but\nDO NOT SHUTDOW THE COMPUTER.\nUPDATE IN PROGRESS:" --text-info --tail --no-buttons --no-focus --fixed < "$PIPE" &
             YAD_PID=$!
         else
             log "Could not calulate yad window position"
             log "Starting yad in a neutral window position"
             # Start YAD in neutral position and feed it from the pipe
-            yad --title="UPDATE IN PROGRESS" --width=$WINDOW_WIDTH --height=$WINDOW_HEIGHT --fontname="Monospace" --wrap --text="You can use your computer while the update is running, but\nDO NOT SHUTDOW THE COMPUTER.\nUPDATE IN PROGRESS:" --text-info --tail --no-buttons --no-focus --fixed < "$PIPE" &
+            yad --title="UPDATE IN PROGRESS" --width="$WINDOW_WIDTH" --height="$WINDOW_HEIGHT" --fontname="Monospace" --wrap --text="You can use your computer while the update is running, but\nDO NOT SHUTDOW THE COMPUTER.\nUPDATE IN PROGRESS:" --text-info --tail --no-buttons --no-focus --fixed < "$PIPE" &
             YAD_PID=$!
         fi
 
