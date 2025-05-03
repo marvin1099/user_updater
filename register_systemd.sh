@@ -54,7 +54,7 @@ if [[ -z "$status" ]]; then
     systemctl enable user_updater.service
 else
     log "Skipping starting the service because the file already existed"
-
+fi
 log "Service user_updater was registerd"
 log ""
 
