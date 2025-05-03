@@ -65,6 +65,7 @@ elif command -v pkg &>/dev/null; then
     PKG_MANAGER="pkg install -y"
 else
     log "Unsupported package manager. Please install manually."
+    exit 1
 fi
 log "Using package manager command \"$PKG_MANAGER\""
 
