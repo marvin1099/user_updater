@@ -21,10 +21,10 @@ echo "$loginfo" | tail -n +2
 log "Seting builder usernames storage file"
 BUsers="/var/lib/user_updater/builder_usernames.txt"
 
-log "Makeing the parrent directory of the usernames storage file"
+log "Making the parrent directory of the usernames storage file"
 mkdir -p "$(dirname $BUsers)"
 
-log "Createing builder usernames file \"$BUsers\""
+log "Creating builder usernames file \"$BUsers\""
 touch "$BUsers"
 
 log "Reading the file line by line and delete any found user"

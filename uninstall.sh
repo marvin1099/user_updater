@@ -11,7 +11,7 @@ SCRIPTPATH=$(dirname "$SCRIPT")
 
 cd "$SCRIPTPATH" || exit 1
 
-loginfo=$(./main_logger.sh "/tmp/user_updater_uninstaller" "Uninstaller" "Uninstall" "uninstall")
+loginfo=$(./main_logger.sh "/tmp/user_updater_uninstaller" "Uninstaller" "Uninstall" "uninstall" "*")
 admin_log="$(echo "$loginfo" | head -1)"
 log() {
     echo "$1" | tee -a "$admin_log"
