@@ -6,13 +6,27 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
+SCRIPT=$(readlink -f $0)
+SCRIPTPATH=$(dirname "$SCRIPT")
+
+cd "$SCRIPTPATH"
+
+loginfo=$(./main_logger.sh "" "Systemd register" "Install" "install")
+admin_log="$(echo "$loginfo" | head -1)"
+log() {
+    echo "$1" | tee -a "$admin_log"
+}
+echo "$(echo "$loginfo" | tail -n +2)"
+
 SERVICE_FILE="/etc/systemd/system/user_updater.service"
+log "Checking if the service file \"$SERVICE_FILE\" exists"
 if [[ -f "$SERVICE_FILE" ]]; then
     status=1
 fi
 
+log "Recreating the service file"
 # Create systemd service file
-sudo bash -c "cat > '$SERVICE_FILE'" <<EOF
+cat > "$SERVICE_FILE" <<EOF
 [Unit]
 Description=User Updater Service
 After=network-online.target
@@ -29,14 +43,18 @@ WorkingDirectory=/var/lib/user_updater
 WantedBy=multi-user.target
 EOF
 
+log "Reloading systemd services list"
 # Reload systemd to recognize the new service
 systemctl daemon-reload
 
 # Only enable if it was not there previously
 if [[ -z "$status" ]]; then 
+    log "Starting the service because the file was missing"
     # Enable the service to start on boot
     systemctl enable user_updater.service
-fi
+else
+    log "Skipping starting the service because the file already existed"
 
-echo "Service user_updater has been created"
+log "Service user_updater was registerd"
+log ""
 

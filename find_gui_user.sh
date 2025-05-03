@@ -1,5 +1,6 @@
 #!/bin/bash
 
+echo "Checking for Xorg or Wayland and Trying to find a connected user"
 while true
 do
     # Check for an Xorg or Wayland session
@@ -14,7 +15,7 @@ do
             #display=$(who | awk -v tty="$tty" '$2 == tty {print substr($5, 2, length($5) - 2)}')
             if [[ -n "$user" ]]
             then
-                #echo "User $user is using a graphical session."
+                echo "User $user is using a graphical session"
                 break
             fi
         done <<< "$ttys"
@@ -25,4 +26,4 @@ do
     fi
     sleep 1
 done
-echo $user
+echo "$user"

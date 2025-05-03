@@ -1,50 +1,72 @@
 #!/bin/bash
 
+SCRIPT=$(readlink -f $0)
+SCRIPTPATH=$(dirname "$SCRIPT")
+
+cd "$SCRIPTPATH"
+
+loginfo=$(sudo ./main_logger.sh "" "Updater" "Updater" "update" "selfupdate" "install")
+admin_log="$(echo "$loginfo" | head -1)"
+log() {
+    echo "$1" | sudo tee -a "$admin_log"
+}
+echo "$(echo "$loginfo" | tail -n +2)"
+
 logfile="/tmp/topgrade-report.log"
 uptoml="$HOME/.config/topgrade.toml"
 MAX_RETRIES=3
 TIMEOUT_SECONDS=60
 
 # Prepare log file
+log "Preparing Update logfile \"$logfile\""
 sudo touch "$logfile"
 sudo chmod 777 "$logfile" 2>/dev/null
 sudo chown root:root "$logfile"
 
 # Ensure topgrade config directory exists
+log "Enshuring config directory \"$HOME/.config\""
 sudo mkdir -p "$HOME/.config"
 sudo chown "$USER":"$USER" "$HOME/.config"
 sudo chmod u+rwx "$HOME/.config"
 
 # Generate config if missing
+log "Trying to generate the config \"$uptoml\""
 timeout 1 topgrade --edit-config > /dev/null 2>&1
 sudo touch "$uptoml"
 sudo chown "$USER":"$USER" "$uptoml"
 sudo chmod u+rwx "$uptoml"
 
 # Enable assume_yes in config
+log "Setting \"assume_yes\" to \"true\" in config"
 misc=0
 if cat "$uptoml" | grep "[misc]" > /dev/null; then
+    log "The \"[misc]\" section was found in config"
     misc=1
 fi
 if cat "$uptoml" | grep "assume_yes =" > /dev/null; then
+    log "String \"assume_yes\" was found in config"
     if [[ $misc -eq 1 ]]
     then
+        log "Replacing \"assume_yes\" line to \"assume_yes = true\""
         sed -i '/assume_yes =/c\assume_yes = true' "$uptoml" > /dev/null
     else
+        log "Replacing \"assume_yes\" line to \"[misc] \n assume_yes = true\""
         sed -i '/assume_yes =/c\[misc]\n\nassume_yes = true' "$uptoml" > /dev/null
     fi
 else
     if [[ $misc -eq 1 ]]
     then
+        log "Replacing \"[misc]\" line to \"[misc] \n assume_yes = true\""
         sed -i '/\[misc\]/c\[misc]\n\nassume_yes = true' "$uptoml" > /dev/null
     else
+        log "No valid config found adding \"[misc] \n assume_yes = true\" as well as other sections used by topgrade"
         echo $'[include]\n\n[misc]\n\nassume_yes = true\n\n[pre_commands]\n\n[post_commands]\n\n[commands]\n\n[python]\n\n[composer]\n\n[brew]\n\n[linux]\n\n[git]\n\n[windows]\n\n[npm]\n\n[yarn]\n\n[deno]\n\n[vim]\n\n[firmware]\n\n[vagrant]\n\n[flatpak]\n\n[distrobox]\n\n[containers]\n\n[lensfun]\n\n[julia]' >> "$uptoml"
     fi
 fi
 
 # Function to run topgrade with monitoring
 run_with_watchdog() {
-    echo "Starting topgrade attempt $1..."
+    log "Starting topgrade attempt $1..."
     yes | topgrade --no-retry -c >> "$logfile" 2>&1 &
     pid=$!
     msg_nr=0
@@ -60,33 +82,35 @@ run_with_watchdog() {
             if [[ $1 -eq $MAX_RETRIES ]]; then
                 msg_nr=$((msg_nr + 1))
                 if [[ $msg_nr -eq 1 ]]; then
-                    echo "" >> "$logfile"
-                    echo "The update seems to take longer then expected" >> "$logfile"
-                    echo "If this message keeps showing up you may need to manually update" >> "$logfile"
-                    echo "" >> "$logfile"
+                    ms=$'\n'"The update seems to take longer then expected"
+                    ms+=$'\n'"If this message keeps showing up you may need to manually update"$'\n'
+                    echo "$ms" >> "$logfile"
+                    log "$ms"
                     divider=2
-                elif [[ $msg_nr -eq 2 ]]; then
-                    echo "" >> "$logfile"
-                    echo "The update won't seem to finsh, START A MANUAL UPDATE" >> "$logfile"
-                    echo "If you don not know how to update manually ask you system admin or websearch:" >> "$logfile"
+                elif [[ $msg_nr -eq 2 ]] || [[ $msg_nr -eq 3 ]]; then
+                    ms=$'\n'"The update won't seem to finsh, START A MANUAL UPDATE"
+                    ms+=$'\n'"If you don not know how to update manually ask you system admin or websearch:"
                     name=$(cat /etc/os-release | awk -F'NAME=' '/NAME/ {print substr($2,2,length($2)-2)}' | head -1) #' 
-                    echo "How to update $name in the terminal" >> "$logfile"
-                    echo "Then open you terminal an paste the command you found online and hit enter" >> "$logfile"
-                    echo "You may need to enter you password enter to start the installation and confirm by pressing Y and Enter" >> "$logfile"
-                    echo "Reboot after the manual update is done" >> "$logfile"
-                    echo "" >> "$logfile"
-                elif [[ $msg_nr -gt 2 ]]; then
-                    msg_nr=1
+                    ms+=$'\n'"How to update $name in the terminal"
+                    ms+=$'\n'"Then open you terminal an paste the command you found online and hit enter"
+                    ms+=$'\n'"You may need to enter you password enter to start the installation and confirm by pressing Y and Enter"
+                    ms+=$'\n'"Reboot after the manual update is done"$'\n'
+                    echo "$ms" >> "$logfile"
+                    if [[ $msg_nr -eq 2 ]]; then
+                        log "$ms"
+                    fi
+                elif [[ $msg_nr -gt 4 ]]; then
+                    msg_nr=2
                     divider=1
                 fi
             else
-                echo "Detected potential stalemate. Killing topgrade (PID $pid)..."
+                log "Detected potential stalemate. Killing topgrade (PID $pid)..."
                 sudo kill -9 $pid 2>/dev/null
                 sleep 1
                 if sudo kill -0 $pid 2>/dev/null; then
-                    echo "Failed to kill topgrade (PID $pid)."
+                    log "Failed to kill topgrade (PID $pid)."
                 else
-                    echo "Successfully killed stuck topgrade (PID $pid)."
+                    log "Successfully killed stuck topgrade (PID $pid)."
                 fi
                 return 1
             fi
@@ -95,47 +119,66 @@ run_with_watchdog() {
     return 0
 }
 
+log "Waiting for any user to login except root"
 # Wait for any user to login except root
 while true; do
-  if who | awk '{ if ($1 != "root") print $1 }' | head -1; then
-    echo "User detected. Proceeding..."
+  u="$(who | awk '{ if ($1 != "root") print $1 }' | head -1)"
+  if [[ -n "$u" ]]; then
+    log "User \"$u\" detected. Proceeding..."
     break
   fi
   sleep 5
 done
 
+log "Trying to find any active gui user"
 # Get the gui user, if any for later
-g_user=$(timeout 30 ./find_gui_user.sh | tail -1) # This is here to enshure the user is logged in
-if [[ -n "$g_user" ]]
-then
-    sleep 10 # start 10 seconds after the user is logged in
+fg_user=$(timeout 30 ./find_gui_user.sh) # This is here to enshure the user is logged in
+cg_user=$?
+g_user=$(echo "$fg_user" | tail -1)
+log "$(echo "$fg_user" | head -n -1)"
+
+if [[ -n "$g_user" ]] && [[ "$cg_user" == 0 ]]; then
+    log "Found gui user \"$g_user\", starting update in 20 seconds"
+    sleep 20 # start 20 seconds after the user is logged in
 fi
 
 # Try with retries
 attempt=1
+log "Running update with watchdog"
 while (( attempt <= MAX_RETRIES )); do
     run_with_watchdog $attempt && break
     attempt=$((attempt + 1))
-    echo "Retrying... ($attempt/$MAX_RETRIES)"
+    log "Retrying... ($attempt/$MAX_RETRIES)"
 done
 
-echo "Topgrade system updates finished!" >> "$logfile"
+ms="Topgrade system updates finished!"
+echo "$ms" >> "$logfile"
+log "$ms"
 
 if [[ -z "$g_user" ]]
 then
+    log "Rechecking for previusly skipped gui user gathering"
     g_user=$(who | awk '{ if ($1 != "root") print $1 }' | head -1) #'
 fi
 
 # If there was a gui user update their tools
 if [[ -n "$g_user" ]]
 then
+    log "Got \"$g_user\", updating their user tools"
     echo "Updating user tools..." >> "$logfile"
     sudo -u "$g_user" "/home/$g_user/.config/user_updater/update_user_tools.sh" >> "$logfile" 2>&1
-    echo "User tool updates done" >> "$logfile"
+    ms="User tool updates done"
+    echo "$ms" >> "$logfile"
+    log "$ms"
 else
-    echo "No logged in user was found." >> "$logfile"
-    echo "Skipping user tool updates" >> "$logfile"
+    ms="No logged in user was found"
+    log "$ms"
+    echo "$ms" >> "$logfile"
+    ms="Skipping user tool updates"
+    log "$ms"
+    echo "$ms" >> "$logfile"
 fi
 
+log "Removing Logfile"
 sleep 0.5
 sudo rm "$logfile"
