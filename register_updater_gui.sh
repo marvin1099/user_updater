@@ -64,15 +64,14 @@ for dir in /home/*; do
         continue
     fi
 
-    # Write the .desktop entry for autostart
-    {
-        echo "[Desktop Entry]"
-        echo "Type=Application"
-        echo "Exec=bash '$new_scipt_path'"
-        echo "Name=Update GUI Report"
-        echo "Comment=Start the Update GUI report automatically"
-        echo "X-GNOME-Autostart-enabled=true"
-    } > "$desktop_file"
+cat > "$desktop_file" <<EOF
+[Desktop Entry]
+Type=Application
+Exec=bash '$new_scipt_path'
+Name=Update GUI Report
+Comment=Start the Update GUI report automatically
+X-GNOME-Autostart-enabled=true
+EOF
 
     log "Make shure autostart file can be run and set the the current user as owner"
     # Make sure the script is executable
