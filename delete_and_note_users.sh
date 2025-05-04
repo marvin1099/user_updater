@@ -11,7 +11,7 @@ SCRIPTPATH=$(dirname "$SCRIPT")
 
 cd "$SCRIPTPATH" || exit 1
 
-loginfo=$(./main_logger.sh "" "Delete old build users" "Self Update" "selfupdate")
+loginfo=$(./main_logger.sh "" "Delete old build users" "Update" "update")
 UUPDATER_IDATE=$(echo "$loginfo" | sed -n '1p')
 export UUPDATER_IDATE
 UUPDATER_ACTION=$(echo "$loginfo" | sed -n '2p')

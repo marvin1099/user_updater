@@ -11,7 +11,7 @@ SCRIPTPATH=$(dirname "$SCRIPT")
 
 cd "$SCRIPTPATH" || exit 1
 
-loginfo=$(./main_logger.sh "" "Self Update" "selfupdate" "update")
+loginfo=$(./main_logger.sh "" "Update" "update" "update")
 UUPDATER_IDATE=$(echo "$loginfo" | sed -n '1p')
 export UUPDATER_IDATE
 UUPDATER_ACTION=$(echo "$loginfo" | sed -n '2p')
