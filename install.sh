@@ -13,7 +13,6 @@ chmod a+wr "$log_dir"
 if [[ -z "$UUPDATER_IDATE" ]]; then
     UUPDATER_IDATE="$(date '+%F_%H-%M-%S')"
     export UUPDATER_IDATE
-    uuset=1
 fi
 if [[ -z "$UUPDATER_ACTION" ]]; then
     UUPDATER_ACTION="install"
@@ -25,7 +24,7 @@ chmod 664 "$admin_log"
 log() {
     echo "$1" | tee -a "$admin_log"
 }
-if [[ -z "$uuset" ]]; then
+if [[ ! -f "$admin_log" ]]; then
     echo "Logs are saved to \"$log_dir\""
     log "Starting Install log at $UUPDATER_IDATE"
 else

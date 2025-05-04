@@ -25,7 +25,6 @@ mkdir -p "$log_dir"
 chmod a+wr "$log_dir"
 if [[ -z "$UUPDATER_IDATE" ]]; then
     UUPDATER_IDATE="$(date '+%F_%H-%M-%S')"
-    uuset=1
 fi
 echo "$UUPDATER_IDATE"
 if [[ -z "$UUPDATER_ACTION" ]] || [[ "$UUPDATER_ACTION" == "$onf_action" ]] || [[ "$UUPDATER_ACTION" == "$ons_action" ]] || [[ "$onf_action" == "*" ]]
@@ -40,7 +39,7 @@ log() {
     echo "$1" | tee -a "$admin_log"
 }
 echo "$admin_log"
-if [[ -z "$uuset" ]]; then
+if [[ ! -f "$admin_log" ]]; then
     echo "Logs are saved to \"$log_dir\""
     log "Starting $action_string log at $UUPDATER_IDATE"
 else
