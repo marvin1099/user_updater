@@ -36,7 +36,7 @@ sudo chmod u+rwx "$HOME/.config"
 # Generate config if missing
 log "Generating the topgrade config \"$uptoml\""
 if [[ ! -f "$uptoml" ]]; then
-    topgrade --config-reference > \"$uptoml\"
+    topgrade --config-reference > "$uptoml"
 fi
 sudo touch "$uptoml"
 sudo chown "$USER":"$USER" "$uptoml"

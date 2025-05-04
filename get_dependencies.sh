@@ -16,7 +16,8 @@ if [[ -z "$UUPDATER_IDATE" ]]; then
     uuset=1
 fi
 if [[ -z "$UUPDATER_ACTION" ]]; then
-    export UUPDATER_ACTION="install"
+    UUPDATER_ACTION="install"
+    export UUPDATER_ACTION
 fi
 admin_log="$log_dir/${UUPDATER_IDATE}_$UUPDATER_ACTION.log"
 touch "$admin_log"
