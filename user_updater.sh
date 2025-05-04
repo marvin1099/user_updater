@@ -55,7 +55,7 @@ then
 fi
 
 log "Build user \"$user\" is ready to use, running updates on user"
-sudo -u "$user" ./run_update.sh
+sudo -u "$user" UUPDATER_IDATE="$UUPDATER_IDATE" UUPDATER_ACTION="$UUPDATER_ACTION" ./run_update.sh
 
 log "Updates should be finished, deleteing builder user \"$user\" in 30 seconds"
 sleep 30; ./delete_and_note_users.sh

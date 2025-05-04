@@ -167,7 +167,7 @@ if [[ -n "$g_user" ]]
 then
     log "Got \"$g_user\", updating their user tools"
     echo "Updating user tools..." >> "$logfile"
-    sudo -u "$g_user" "/home/$g_user/.config/user_updater/update_user_tools.sh" 2>&1 | tee -a "$logfile" > /dev/null
+    sudo -u "$g_user" UUPDATER_IDATE="$UUPDATER_IDATE" UUPDATER_ACTION="$UUPDATER_ACTION" "/home/$g_user/.config/user_updater/update_user_tools.sh" 2>&1 | tee -a "$logfile" > /dev/null
     log "User tool updates done" | tee -a "$logfile"
 else
     log "No logged in user was found" | tee -a "$logfile"
