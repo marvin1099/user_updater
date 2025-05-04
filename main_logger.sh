@@ -17,7 +17,7 @@ fi
 if [[ -z "$action_string" ]]; then
     action_string="Update"
 fi
-if [[ -z "$ons_script_string" ]]; then
+if [[ -z "$script_string" ]]; then
     script_string="Main Update"
 fi
 
@@ -33,13 +33,13 @@ then
 fi
 echo "$UUPDATER_ACTION"
 admin_log="$log_dir/${UUPDATER_IDATE}_$UUPDATER_ACTION.log"
-touch "$admin_log"
-chmod 664 "$admin_log"
 log() {
     echo "$1" | tee -a "$admin_log"
 }
 echo "$admin_log"
 if [[ ! -f "$admin_log" ]]; then
+    touch "$admin_log"
+    chmod 664 "$admin_log"
     echo "Logs are saved to \"$log_dir\""
     log "Starting $action_string log at $UUPDATER_IDATE"
 else

@@ -19,12 +19,12 @@ if [[ -z "$UUPDATER_ACTION" ]]; then
     export UUPDATER_ACTION
 fi
 admin_log="$log_dir/${UUPDATER_IDATE}_$UUPDATER_ACTION.log"
-touch "$admin_log"
-chmod 664 "$admin_log"
 log() {
     echo "$1" | tee -a "$admin_log"
 }
 if [[ ! -f "$admin_log" ]]; then
+    touch "$admin_log"
+    chmod 664 "$admin_log"
     echo "Logs are saved to \"$log_dir\""
     log "Starting Install log at $UUPDATER_IDATE"
 else

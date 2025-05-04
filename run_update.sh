@@ -5,7 +5,7 @@ SCRIPTPATH=$(dirname "$SCRIPT")
 
 cd "$SCRIPTPATH" || exit 1
 
-loginfo=$(sudo ./main_logger.sh "" "Updater" "Updater" "update" "selfupdate" "install")
+loginfo=$(sudo UUPDATER_IDATE="$UUPDATER_IDATE" UUPDATER_ACTION="$UUPDATER_ACTION" ./main_logger.sh "" "Updater" "Updater" "update" "selfupdate" "install")
 UUPDATER_IDATE=$(echo "$loginfo" | sed -n '1p')
 export UUPDATER_IDATE
 UUPDATER_ACTION=$(echo "$loginfo" | sed -n '2p')

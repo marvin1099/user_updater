@@ -19,12 +19,12 @@ if [[ -z "$UUPDATER_ACTION" ]]; then
     export UUPDATER_ACTION
 fi
 admin_log="$log_dir/${UUPDATER_IDATE}_$UUPDATER_ACTION.log"
-touch "$admin_log"
-chmod 664 "$admin_log"
 log() {
     echo "$1" | tee -a "$admin_log"
 }
 if [[ ! -f "$admin_log" ]]; then
+    touch "$admin_log"
+    chmod 664 "$admin_log"
     echo "Logs are saved to \"$log_dir\""
     log "Starting Install log at $UUPDATER_IDATE"
 else
@@ -37,7 +37,6 @@ install_dir="/var/lib/user_updater"
 if [[ -f "get_dependencies.sh" ]] && [[ "$(pwd)" != "$install_dir" ]]
 then
     log "Found install directory and dependencies script"
-    log "Starting dependencies install script"
     ./get_dependencies.sh && deps=1
 else
     log "Install directory not present or dependencies install script not found"
@@ -81,7 +80,6 @@ log "Navigating to install directory"
 cd "$install_dir" || exit 1
 
 if [[ -z "$deps" ]]; then
-    log "Starting dependencies install script"
     ./get_dependencies.sh || exit 1
 fi
 
