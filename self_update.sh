@@ -121,8 +121,7 @@ done
 
 log "Config was read"
 
-if [[ -z $stop_inst ]]
-then
+if [[ -z $stop_inst ]]; then
     if [[ -n $fup ]]
     then
         log "Self Update was requested to be forced. Forcing update..."

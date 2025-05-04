@@ -34,8 +34,7 @@ log "Starting Main Install script"
 
 log "Checking if run from install directory \"$install_dir\" and if dependencies script is present..."
 install_dir="/var/lib/user_updater"
-if [[ -f "get_dependencies.sh" ]] && [[ "$(pwd)" != "$install_dir" ]]
-then
+if [[ -f "get_dependencies.sh" ]] && [[ "$(pwd)" != "$install_dir" ]]; then
     log "Found install directory and dependencies script"
     ./get_dependencies.sh && deps=1
 else
@@ -44,7 +43,7 @@ fi
 
 log "Checking if the repo was cloned to the install directory \"$install_dir\""
 git=0
-cd "$install_dir" && {
+if cd "$install_dir"; then
     if git rev-parse --is-inside-work-tree 2> /dev/null
     then
         log "Trying to pull git update"
@@ -53,15 +52,14 @@ cd "$install_dir" && {
     else
         log "No git repo found in install directory"
     fi
-} || {
+else
     log "Install directory not present"
-}
+fi
 
 log "Navigating to parrent of install directory"
 cd "$(dirname "$install_dir")" || exit 1
 
-if [[ $git -eq 0 ]]
-then
+if [[ $git -eq 0 ]]; then
     log "Trying to Clone user_updater repository..."
     if ! git clone https://codeberg.org/marvin1099/user_updater
     then

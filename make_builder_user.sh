@@ -64,8 +64,7 @@ fi
 
 log "Adding user to the docker group"
 # Add to docker for container updates
-if getent group docker
-then
+if getent group docker; then
     usermod -a -G docker "$USER_NAME"
 fi
 

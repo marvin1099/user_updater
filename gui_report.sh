@@ -19,6 +19,7 @@ echo "$loginfo" | sed -n '4,$p'
 log "Setting monitored file"
 LOG_FILE="/tmp/topgrade-report.log"  # Path to the monitored file
 PERM_LOG="${admin_log%.*}return.log"
+echo "Starting Update Return Log at $UUPDATER_IDATE" >> "$PERM_LOG"
 
 while true
 do

@@ -47,8 +47,7 @@ do
     fi
 done < "$builder_usernames"
 
-if [[ $err -eq 1 ]] || [[ -z $user ]]
-then
+if [[ $err -eq 1 ]] || [[ -z $user ]]; then
     log "No valid builder user found, making a new builder user"
     out=$(./make_builder_user.sh)
     user=$(echo "$out" | tail -1)

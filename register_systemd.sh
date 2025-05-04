@@ -53,12 +53,11 @@ systemctl daemon-reload
 
 # Only enable if it was not there previously
 if [[ -z "$status" ]]; then 
-    log "Starting the service because the file was missing"
+    log "Enabling the service because the file was missing"
     # Enable the service to start on boot
     systemctl enable user_updater.service
 else
     log "Skipping starting the service because the file already existed"
 fi
 log "Service user_updater was registerd"
-log ""
 

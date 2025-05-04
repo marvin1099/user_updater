@@ -27,8 +27,7 @@ if [[ -z "$UUPDATER_IDATE" ]]; then
     UUPDATER_IDATE="$(date '+%F_%H-%M-%S')"
 fi
 echo "$UUPDATER_IDATE"
-if [[ -z "$UUPDATER_ACTION" ]] || [[ "$UUPDATER_ACTION" == "$onf_action" ]] || [[ "$UUPDATER_ACTION" == "$ons_action" ]] || [[ "$onf_action" == "*" ]]
-then
+if [[ -z "$UUPDATER_ACTION" ]] || [[ "$UUPDATER_ACTION" == "$onf_action" ]] || [[ "$UUPDATER_ACTION" == "$ons_action" ]] || [[ "$onf_action" == "*" ]]; then
     UUPDATER_ACTION="$action"
 fi
 echo "$UUPDATER_ACTION"

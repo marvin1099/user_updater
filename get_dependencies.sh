@@ -108,4 +108,3 @@ else
 fi
 
 log "All dependencies installed"
-log ""

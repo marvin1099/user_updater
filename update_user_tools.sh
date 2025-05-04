@@ -5,14 +5,29 @@ SCRIPTPATH=$(dirname "$SCRIPT")
 
 cd "$SCRIPTPATH" || exit 1
 
-loginfo=$(./main_logger.sh "" "User Tool Updater" "User Updater" "${USER}update" "*")
+suffix="${USER}updatereturn"
+loginfo=$(./main_logger.sh "" "User Tool Updater" "User Updater" "$suffix" "*")
 UUPDATER_IDATE=$(echo "$loginfo" | sed -n '1p')
 export UUPDATER_IDATE
 UUPDATER_ACTION=$(echo "$loginfo" | sed -n '2p')
 export UUPDATER_ACTION
 admin_log=$(echo "$loginfo" | sed -n '3p')
+
+log_dir="$(dirname "$admin_log")"
+log_suffix="_$suffix.log"
+
+# Try to find a recent log within the last minute
+recent_log=$(find "$log_dir" -maxdepth 1 -type f -name "*$log_suffix" -mmin -1 -print0 | sort -z | tail -zn1 | xargs -0)
+
+# Set log to use to recent_log if set otherwise use admin_log
+if [[ -n "$recent_log" ]]; then
+    PERM_LOG="$recent_log"
+else
+    PERM_LOG="$admin_log"
+fi
+
 log() {
-    echo "$1" | tee -a "$admin_log"
+    echo "$1" | tee -a "$PERM_LOG"
 }
 echo "$loginfo" | sed -n '4,$p'
 
