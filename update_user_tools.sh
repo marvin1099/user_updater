@@ -5,36 +5,12 @@ SCRIPTPATH=$(dirname "$SCRIPT")
 
 cd "$SCRIPTPATH" || exit 1
 
-if [[ -z "$UUPDATER_IDATE" ]]; then
-    UUPDATER_IDATE="$(date '+%F_%H-%M-%S')"
-    export UUPDATER_IDATE
-fi
-suffix="${USER}updatereturn"
-UUPDATER_ACTION="$suffix"
-export UUPDATER_ACTION
-
-log_dir="/var/lib/user_updater/logs"
-log_suffix="_$suffix.log"
-
-# Try to find a recent log within the last minute
-recent_log=$(find "$log_dir" -maxdepth 1 -type f -name "*$log_suffix" -mmin -1 -print0 | sort -z | tail -zn1 | xargs -0)
-
-# Set log to use to recent_log if set otherwise generate log filename
-if [[ -n "$recent_log" ]]; then
-    PERM_LOG="$recent_log"
-else
-    PERM_LOG="$log_dir/${UUPDATER_IDATE}${log_suffix}"
-fi
-
 log() {
-    echo "$1" | tee -a "$PERM_LOG"
+    echo "$1"
 }
-if [[ -f "$PERM_LOG" ]]; then
-    echo "Logs are saved to \"$log_dir\""
-    log "Starting User Updater log at $UUPDATER_IDATE"
-else
-    log ""
-fi
+
+log ""
+
 log "Starting User Tool Updater script"
 
 log "Updating user-level tools..."

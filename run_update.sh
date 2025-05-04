@@ -153,26 +153,35 @@ fi
 
 # Try with retries
 attempt=1
-log "Running update with watchdog"
+log "Running update with watchdog" | tee -a "$logfile"
+echo "" >> "$logfile"
 while (( attempt <= MAX_RETRIES )); do
     run_with_watchdog $attempt && break
     attempt=$((attempt + 1))
-    log "Retrying... ($attempt/$MAX_RETRIES)"
+    echo "" >> "$logfile"
+    log "Retrying... ($attempt/$MAX_RETRIES)" | tee -a "$logfile"
+    echo "" >> "$logfile"
 done
 
+echo "" >> "$logfile"
 log "Topgrade system updates finished!" | tee -a "$logfile"
 
 # If there was a gui user update their tools
 if [[ -n "$g_user" ]]; then
+    log "" | tee -a "$logfile"
     log "Got \"$g_user\", updating their user tools"
     echo "Updating user tools..." >> "$logfile"
-    sudo -u "$g_user" UUPDATER_IDATE="$UUPDATER_IDATE" UUPDATER_ACTION="$UUPDATER_ACTION" "/home/$g_user/.config/user_updater/update_user_tools.sh" 2>&1 | tee -a "$logfile" > /dev/null
+    echo "" >>  "$logfile"
+    sudo -u "$g_user" "/home/$g_user/.config/user_updater/update_user_tools.sh" 2>&1 | tee -a "$logfile" > /dev/null
+    echo "" >>  "$logfile"
     log "User tool updates done" | tee -a "$logfile"
 else
+    log "" | tee -a "$logfile"
     log "No logged in user was found" | tee -a "$logfile"
     log "Skipping user tool updates" | tee -a "$logfile"
 fi
 
+log ""
 log "Removing Logfile"
 sleep 0.5
 sudo rm "$logfile"
