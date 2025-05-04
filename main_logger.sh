@@ -25,13 +25,14 @@ mkdir -p "$log_dir"
 chmod a+wr "$log_dir"
 if [[ -z "$UUPDATER_IDATE" ]]; then
     UUPDATER_IDATE="$(date '+%F_%H-%M-%S')"
-    export UUPDATER_IDATE
     uuset=1
 fi
+echo "$UUPDATER_IDATE"
 if [[ -z "$UUPDATER_ACTION" ]] || [[ "$UUPDATER_ACTION" == "$onf_action" ]] || [[ "$UUPDATER_ACTION" == "$ons_action" ]] || [[ "$onf_action" == "*" ]]
 then
-    export UUPDATER_ACTION="$action"
+    UUPDATER_ACTION="$action"
 fi
+echo "$UUPDATER_ACTION"
 admin_log="$log_dir/${UUPDATER_IDATE}_$UUPDATER_ACTION.log"
 touch "$admin_log"
 chmod 664 "$admin_log"

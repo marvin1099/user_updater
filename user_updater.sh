@@ -12,11 +12,15 @@ SCRIPTPATH=$(dirname "$SCRIPT")
 cd "$SCRIPTPATH" || exit 1
 
 loginfo=$(./main_logger.sh "" "Main Update" "Self Update" "selfupdate" "install")
-admin_log="$(echo "$loginfo" | head -1)"
+UUPDATER_IDATE=$(echo "$loginfo" | sed -n '1p')
+export UUPDATER_IDATE
+UUPDATER_ACTION=$(echo "$loginfo" | sed -n '2p')
+export UUPDATER_ACTION
+admin_log=$(echo "$loginfo" | sed -n '3p')
 log() {
     echo "$1" | tee -a "$admin_log"
 }
-echo "$loginfo" | tail -n +2
+echo "$loginfo" | sed -n '4,$p'
 
 log "Running self update"
 ./self_update.sh
