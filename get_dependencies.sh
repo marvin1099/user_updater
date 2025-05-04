@@ -6,6 +6,33 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
+# Admin log setup
+log_dir="/var/lib/user_updater/logs"
+mkdir -p "$log_dir"
+chmod a+wr "$log_dir"
+if [[ -z "$UUPDATER_IDATE" ]]; then
+    UUPDATER_IDATE="$(date '+%F_%H-%M-%S')"
+    export UUPDATER_IDATE
+fi
+if [[ -z "$UUPDATER_ACTION" ]]; then
+    UUPDATER_ACTION="install"
+    export UUPDATER_ACTION
+fi
+admin_log="$log_dir/${UUPDATER_IDATE}_$UUPDATER_ACTION.log"
+log() {
+    echo "$1" | tee -a "$admin_log"
+}
+if [[ ! -f "$admin_log" ]]; then
+    touch "$admin_log"
+    chmod 664 "$admin_log"
+    echo "Logs are saved to \"$log_dir\""
+    log "Starting Install log at $UUPDATER_IDATE"
+else
+    log ""
+fi
+log "Starting Dependencies install script"
+
+log "Setting Dependencies Dictionary"
 # Map of packages and the commands they provide
 declare -A deps=(
     [git]="git"
@@ -16,6 +43,7 @@ declare -A deps=(
     [systemd]="systemctl"
 )
 
+log "Detecting package manager"
 # Detect package manager
 if command -v pacman &>/dev/null; then
     PKG_MANAGER="pacman -S --noconfirm"
@@ -36,42 +64,47 @@ elif command -v xbps-install &>/dev/null; then
 elif command -v pkg &>/dev/null; then
     PKG_MANAGER="pkg install -y"
 else
-    echo "Unsupported package manager. Please install manually."
+    log "Unsupported package manager. Please install manually."
     exit 1
 fi
+log "Using package manager command \"$PKG_MANAGER\""
 
+log "Checking for installed dependencies"
 # Collect missing dependencies
 to_install=()
 for pkg in "${!deps[@]}"; do
     cmd="${deps[$pkg]}"
     if command -v "$cmd" &>/dev/null; then
-        echo "$pkg ($cmd) is already installed. Skipping..."
+        log "$pkg ($cmd) is already installed. Skipping..."
     else
+        log "Adding \"$pkg\" to dictionary of missing dependencies"
         to_install+=("$pkg")
     fi
 done
 
 # Install missing dependencies if any
 if [ ${#to_install[@]} -gt 0 ]; then
-    echo "Installing missing packages: ${to_install[*]}"
+    log "Installing missing packages: ${to_install[*]}"
     $PKG_MANAGER "${to_install[@]}"
-fi
 
-# Verify installation
-err=0
-for pkg in "${!deps[@]}"; do
-    cmd="${deps[$pkg]}"
-    if ! command -v "$cmd" &>/dev/null; then
-        echo "There was an error installing $pkg (expected command: $cmd)"
-        err=1
+    # Verify installation
+    err=0
+    for pkg in "${!deps[@]}"; do
+        cmd="${deps[$pkg]}"
+        if ! command -v "$cmd" &>/dev/null; then
+            echo "There was an error installing $pkg (expected command: $cmd)"
+            err=1
+        fi
+    done
+
+    if [[ "$err" -eq 1 ]]; then
+        echo "Install these manually"
+        echo "Can't continue without dependencies"
+        echo "Exiting..."
+        exit 1
     fi
-done
-
-if [[ "$err" -eq 1 ]]; then
-    echo "Install these manually"
-    echo "Can't continue without dependencies"
-    echo "Exiting..."
-    exit 1
+else
+    log "No need to install packages, all packages where detected"
 fi
 
-echo "All dependencies installed."
+log "All dependencies installed"

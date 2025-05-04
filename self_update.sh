@@ -6,22 +6,45 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-SCRIPT=$(readlink -f $0)
+SCRIPT=$(readlink -f "$0")
 SCRIPTPATH=$(dirname "$SCRIPT")
 
-cd "$SCRIPTPATH"
+cd "$SCRIPTPATH" || exit 1
 
+loginfo=$(./main_logger.sh "" "Self Update" "selfupdate" "update")
+UUPDATER_IDATE=$(echo "$loginfo" | sed -n '1p')
+export UUPDATER_IDATE
+UUPDATER_ACTION=$(echo "$loginfo" | sed -n '2p')
+export UUPDATER_ACTION
+admin_log=$(echo "$loginfo" | sed -n '3p')
+log() {
+    echo "$1" | tee -a "$admin_log"
+}
+echo "$loginfo" | sed -n '4,$p'
+
+log "Setting config file"
 config_file="user_updater.conf"
 
+stop_inst="$1"
+upda="$2"
+fupda="$3"
+sfile="$4"
+if [[ -n "$upda" ]]; then upda="true"; else upda="false"; fi
+if [[ -n "$fupda" ]]; then upda="true"; else fupda="false"; fi
+if [[ -n "$sfile" ]]; then upda="true"; else sfile="false"; fi
+
+log "Setting config dictionary"
 # Default entries
 declare -A entrys=(
-    ["self update"]="true # This makes the script update itself"
-    ["forced self update"]="true # This will force a update even if local changes are incompatible"
-    ["reactivate service file"]="true # If this is enabled the sytemd service will be reactivated after update"
+    ["self update"]="$upda # This makes the script update itself"
+    ["forced self update"]="$fupda # This will force a update even if local changes are incompatible"
+    ["reactivate service file"]="$sfile # If this is enabled the sytemd service will be reactivated after update"
 )
 
+log "Creating config file"
 touch "$config_file"
 
+log "Reading the config"
 for i in $(seq 1 2); do
     # Collected keys from config
     declare -a keys=()
@@ -70,7 +93,6 @@ for i in $(seq 1 2); do
             found=0
             for existing in "${keys[@]}"; do
                 tr_key="${existing//[[:space:]]/}"
-                ent="${entry,,}"
                 tr_ent="${entry//[[:space:]]/}"
                 if [[ "$tr_key" == "$tr_ent" ]]; then
                     found=1
@@ -97,22 +119,34 @@ for i in $(seq 1 2); do
     fi
 done
 
-if [[ -n $fup ]]
-then
-    up=1
-    git reset --hard origin
-fi
-if [[ -n $up ]]
-then
-    if [[ -n $rsf ]]; then
-        SERVICE_FILE="/etc/systemd/system/user_updater.service"
-        if [[ -f "$SERVICE_FILE" ]]; then
-            rm -f "$SERVICE_FILE"
-        fi
+log "Config was read"
+
+if [[ -z $stop_inst ]]; then
+    if [[ -n $fup ]]
+    then
+        log "Self Update was requested to be forced. Forcing update..."
+        up=1
+        git reset --hard origin
     fi
-    # Make shure no sudo user is set to avid dobble updates and or infinite loops
-    export SUDO_USER=
-    ./install.sh
+    if [[ -n $up ]]
+    then
+        log "Self Update was requested"
+        if [[ -n $rsf ]]; then
+            log "Service was requested to be reactivated. Deleting old service file."
+            SERVICE_FILE="/etc/systemd/system/user_updater.service"
+            if [[ -f "$SERVICE_FILE" ]]; then
+                rm -f "$SERVICE_FILE"
+            fi
+        fi
+
+        log "Update complete, rerunning the installer, to update and reregister"
+        # Make shure no sudo user is set to avid dobble updates and or infinite loops
+        export SUDO_USER=
+        ./install.sh
+    else
+        log "Self Update was disabled. Only Reregistering new users..."
+        ./register_updater_gui.sh
+    fi
 else
-    ./register_updater_gui.sh
+    log "Self Updater was set only create the config"
 fi
