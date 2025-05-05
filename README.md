@@ -135,12 +135,6 @@ To reregister and start the gui on the running user (new user), you can also use
 
 ### File Locations & Maintenance
 
-* App directory:
-  `/var/lib/user_updater`
-
-* Log files:
-  `/var/lib/user_updater/logs/`
-
 * Reinstall by running (The options listed at the end of the Install section can be used here as well):
 
   ```bash
@@ -153,7 +147,17 @@ To reregister and start the gui on the running user (new user), you can also use
   sudo systemctl start user_updater
   ```
 
-* Uninstall completely:
+* App directory:
+  ```bash
+  /var/lib/user_updater
+  ```
+
+* Log files:
+  ```bash
+  /var/lib/user_updater/logs/
+  ```
+
+* Uninstall completely (removes all logs, exept /tmp/user_updater_uninstaller.log):
 
   ```bash
   sudo /var/lib/user_updater/uninstall.sh
