@@ -57,5 +57,8 @@ done
 
 log "Finished deleting remains of updater in users."
 
-log "Deleting main updater install directory."
+log "Copying uninstaller log to /tmp and deleting main updater install directory."
+log ""
+cat "$admin_log" >> /tmp/user_updater_uninstaller.log
+
 rm -rf "$install_dir"
