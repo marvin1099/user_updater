@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Ensure the script is run as root
 if [ "$EUID" -ne 0 ]; then
@@ -23,12 +23,12 @@ log() {
 echo "$loginfo" | sed -n '4,$p'
 
 SERVICE_FILE="/etc/systemd/system/user_updater.service"
-log "Checking if the service file \"$SERVICE_FILE\" exists"
+log "Checking if the service file \"$SERVICE_FILE\" exists."
 if [[ -f "$SERVICE_FILE" ]]; then
     status=1
 fi
 
-log "Recreating the service file"
+log "Recreating the service file."
 # Create systemd service file
 cat > "$SERVICE_FILE" <<EOF
 [Unit]
@@ -47,17 +47,17 @@ WorkingDirectory=/var/lib/user_updater
 WantedBy=multi-user.target
 EOF
 
-log "Reloading systemd services list"
+log "Reloading systemd services list."
 # Reload systemd to recognize the new service
 systemctl daemon-reload
 
 # Only enable if it was not there previously
 if [[ -z "$status" ]]; then 
-    log "Enabling the service because the file was missing"
+    log "Enabling the service because the file was missing."
     # Enable the service to start on boot
     systemctl enable user_updater.service
 else
-    log "Skipping starting the service because the file already existed"
+    log "Skipping starting the service because the file already existed."
 fi
-log "Service user_updater was registerd"
+log "Service user_updater was registerd."
 

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Admin log setup
 log_dir="$1"
@@ -40,9 +40,9 @@ if [[ ! -f "$admin_log" ]]; then
     touch "$admin_log"
     chmod 664 "$admin_log"
     echo "Logs are saved to \"$log_dir\""
-    log "Starting $action_string log at $UUPDATER_IDATE"
+    log "Starting $action_string log at \"$UUPDATER_IDATE\"."
 else
     log ""
 fi
-log "Starting $script_string script"
+log "Starting $script_string script."
 

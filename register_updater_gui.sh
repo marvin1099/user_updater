@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Ensure the script is run as root
 if [ "$EUID" -ne 0 ]; then
@@ -27,7 +27,7 @@ script_path="gui_report.sh"
 tool_updater="update_user_tools.sh"
 logger="main_logger.sh"
 
-log "Checking users in /home"
+log "Checking users in \"/home\"."
 # Loop through all users on the system
 for dir in /home/*; do
     # Skip system users
@@ -35,20 +35,20 @@ for dir in /home/*; do
     if [[ ! -d "$dir" ]] || ! id "$user" &>/dev/null; then
         continue
     fi
-    log "Found user \"$user\""
-    log "Creating autostart and config directory if missing"
+    log "Found user \"$user\"."
+    log "Creating autostart and config directory if missing."
     # Create the autostart directory if it doesn't exist
     sudo -u "$user" mkdir -p "$dir/.config/autostart"
     sudo -u "$user" mkdir -p "$dir/.config/user_updater"
 
-    log "Defining file locations"
+    log "Defining file locations."
     # Create the .desktop file for the autostart entry
     desktop_file="$dir/.config/autostart/gui_report.desktop"
     new_scipt_path="$dir/.config/user_updater/gui_report.sh"
     new_tool_updater="$dir/.config/user_updater/update_user_tools.sh"
     new_logger="$dir/.config/user_updater/main_logger.sh"
 
-    log "Copying user scripts to user directory and setting correct permissions"
+    log "Copying user scripts to user directory and setting correct permissions."
     cat "$script_path" > "$new_scipt_path"
     chmod u+rwx "$new_scipt_path"
     chown "$user":"$user" "$new_scipt_path"
@@ -61,7 +61,7 @@ for dir in /home/*; do
     chmod u+rwx "$new_logger"
     chown "$user":"$user" "$new_logger"
 
-    log "Creating the autostart file"
+    log "Creating the autostart file."
     # Ensure the desktop file is not already present
     if [ -f "$desktop_file" ]; then
         log "Autostart entry already exists for user $user. Skipping..."
@@ -77,15 +77,14 @@ Comment=Start the Update GUI report automatically
 X-GNOME-Autostart-enabled=true
 EOF
 
-    log "Make shure autostart file can be run and set the the current user as owner"
+    log "Make shure autostart file can be run and set the the current user as owner."
     # Make sure the script is executable
     chmod u+rwx "$desktop_file"
 
     # Set the correct ownership for the created .desktop file (user-specific)
     chown "$user":"$user" "$desktop_file"
 
-    log "Autostart entry added for user $user"
+    log "Autostart entry added for user \"$user\"."
 done
 
-log "Autostart registration complete"
-log ""
+log "Autostart registration complete."

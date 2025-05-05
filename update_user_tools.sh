@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 SCRIPT=$(readlink -f "$0")
 SCRIPTPATH=$(dirname "$SCRIPT")
@@ -9,9 +9,7 @@ log() {
     echo "$1"
 }
 
-log ""
-
-log "Starting User Tool Updater script"
+log "Starting User Tool Updater script."
 
 log "Updating user-level tools..."
 
@@ -66,4 +64,3 @@ if command -v gem >/dev/null; then
 fi
 
 log "Done updating user-level tools!"
-log ""

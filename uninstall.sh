@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Ensure the script is run as root
 if [ "$EUID" -ne 0 ]; then
@@ -22,40 +22,40 @@ log() {
 }
 echo "$loginfo" | sed -n '4,$p'
 
-log "Setting install directory"
+log "Setting install directory."
 install_dir="/var/lib/user_updater"
 
-log "Setting service file location"
+log "Setting service file location."
 SERVICE_FILE="/etc/systemd/system/user_updater.service"
 
-log "Stopping service"
+log "Stopping service."
 systemctl stop user_updater.service
 
-log "Removing service file"
+log "Removing service file."
 rm -f "$SERVICE_FILE"
 
 ./delete_and_note_users.sh
 
-log "Removing updater in computer users"
+log "Removing updater in computer users."
 for dir in /home/*; do
     # Skip system users
     user="$(basename "$dir")"
     if [[ ! -d "$dir" ]] || ! id "$user" &>/dev/null; then
         continue
     fi
-    log "Found user \"$user\", killing gui report script"
+    log "Found user \"$user\", killing gui report script."
     g_pid=$(ps aux | awk '/gui_report.sh/ && !/awk/ {if ($1 == "'"$user"'" && $11 ~ "bash" && $12 ~ "user_updater/gui_report.sh") print $2}' | head -n 1)
     if [[ -n $g_pid ]]; then
         kill -9 "$g_pid"
     fi
-    log "Deleting user autostart entry and updater in user config folder"
+    log "Deleting user autostart entry and updater in user config folder."
     updater_config_dir="$dir/.config/user_updater/"
     desktop_file="$dir/.config/autostart/gui_report.desktop"
     rm -f "$desktop_file"
     rm -rf "$updater_config_dir"
 done
 
-log "Finished deleting remains of updater in users"
+log "Finished deleting remains of updater in users."
 
-log "Deleting main updater install directory"
+log "Deleting main updater install directory."
 rm -rf "$install_dir"

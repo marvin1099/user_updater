@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Ensure the script is run as root
 if [ "$EUID" -ne 0 ]; then
@@ -22,20 +22,20 @@ log() {
 }
 echo "$loginfo" | sed -n '4,$p'
 
-log "Seting builder usernames storage file"
+log "Setting builder usernames storage file."
 BUsers="/var/lib/user_updater/builder_usernames.txt"
 
-log "Making the parrent directory of the usernames storage file"
+log "Making the parrent directory of the usernames storage file."
 mkdir -p "$(dirname $BUsers)"
 
-log "Creating builder usernames file \"$BUsers\""
+log "Creating builder usernames file \"$BUsers\"."
 touch "$BUsers"
 
-log "Reading the file line by line and delete any found user"
+log "Reading the file line by line and delete any found user."
 while read -r p; do
     if [[ -n $p ]]
     then
-        log "Checking for user \"$p\""
+        log "Checking for user \"$p\"."
         if id "$p" &>/dev/null
         then
             log "Found user. Deleting..."
@@ -44,7 +44,7 @@ while read -r p; do
 
         HomeDir="/tmp/$p"
         #echo $HomeDir
-        log "Checking for home directory \"$HomeDir\""
+        log "Checking for home directory \"$HomeDir\"."
         if [[ -d "$HomeDir" ]]
         then
             log "Found home directory. Deleting..."
@@ -52,7 +52,7 @@ while read -r p; do
         fi
 
         RM_SUDOERS_FILE="/etc/sudoers.d/${p/./\-}"
-        log "Checking for sudoers file \"$RM_SUDOERS_FILE\""
+        log "Checking for sudoers file \"$RM_SUDOERS_FILE\"."
         if [[ -f "$RM_SUDOERS_FILE" ]]
         then
             log "Found sudoers file. Deleting..."
@@ -60,19 +60,19 @@ while read -r p; do
         fi
     fi
 done < "$BUsers"
-log "Deleting builder usernames file"
+log "Deleting builder usernames file."
 rm "$BUsers"
-log "Touching builder usernames file"
+log "Create empty builder usernames file."
 touch "$BUsers"
 
-log "Adding given arguments as users to builder usernames file"
+log "Adding given arguments as users to builder usernames file."
 for var in "$@"
 do
     if [[ -n "$var" ]]; then
-        log "Got user \"$var\""
-        log "Adding user to builder usernames file"
+        log "Got user \"$var\"."
+        log "Adding user to builder usernames file."
         echo "$var" >> "$BUsers"
     fi
 done
-log "Finished deleting builders and noting new ones"
+log "Finished deleting builders and noting new ones."
 log ""
