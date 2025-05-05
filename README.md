@@ -1,157 +1,160 @@
 ## **user_updater**
 
-A simple tool for automatic system updates using [`topgrade`](https://github.com/topgrade-rs/topgrade),  
-featuring a background systemd service and a lightweight GUI to notify users of ongoing updates.
+A simple tool for automatic system updates using [`topgrade`](https://github.com/topgrade-rs/topgrade),
+featuring a background systemd service and lightweight GUI to notify users during updates.
 
-> Only Unix systems are supported.  
-> macOS *might* work, but is not officially supported.
+> Unix-like systems only.  
+> macOS *may* work, but it’s not officially supported.
 
 ---
 
 ### Features
 
-- Automatic system updates via [`topgrade`](https://github.com/topgrade-rs/topgrade)
-- GUI notification when updates are in progress (`yad` popup window)
-- A temporary, passwordless `builder` user (name randomized)
-- Secure by default — `builder` has no login access and is deleted after use
-- Background updates via systemd
-- GUI notification autostarts per user
-- Minimal system impact — zero interference with your daily use
+* Automatic system updates via [`topgrade`](https://github.com/topgrade-rs/topgrade)
+* Desktop GUI notifications (using `yad`)
+* Temporary passwordless `builder` user (name is randomized)
+* Secure by default — `builder` (temporary admin) has no login access and is removed after use
+* Systemd-based background service
+* Per-user autostart for GUI
+* Unobtrusive during normal use
 
 ---
 
-### Why It's Great for New or Casual Linux Users
+### Why It’s Great for Casual Linux Users
 
-Many Linux users — especially beginners or those who use Linux casually —  
-either forget or don’t know how to keep their systems updated.
+Many users forget to update or aren’t comfortable using the terminal.
+**user_updater** solves that by:
 
-**user_updater** fixes that by:
+* Updating the system in the background — no terminal needed (after install)
+* Showing a popup while updates run, so you know not to reboot
+* Keeping your system safe with zero input
 
-- Automatically updating your system in the background — no terminal skills required  
-- Showing a popup while updates are happening, so you know not to shut down or reboot during critical processes  
-- Keeping your system secure and maintained with minimal input
+Safe by design:
 
-It also runs safely by:
-- Using a separate background user
-- Not requiring you to enter your password every time
-- Deleting the `builder` user after its job is done, reducing risk of misuse
+* Runs updates as a temporary system user
+* Doesn’t require repeated password prompts (only on first install)
+* Deletes the `builder` (temporary admin) user after each update
 
 ---
 
 ### Install
 
-Install with a single command:
+**Simple install (requires sudo):**
 
 ```bash
 curl -s https://codeberg.org/marvin1099/user_updater/raw/branch/main/install.sh | sudo bash
 ```
 
-Your **user password** will be requested during installation.
-
-If you **don’t have sudo yet**, use this command instead — it installs sudo and installs the tool:
+Don’t have sudo yet?  
+Use this instead (requires root password first):
 
 ```bash
 curl -fsS https://codeberg.org/marvin1099/user_updater/raw/branch/main/get_dependencies.sh -o /tmp/get_dependencies.sh && chmod +x /tmp/get_dependencies.sh && su -c "/tmp/get_dependencies.sh" && curl -fsS https://codeberg.org/marvin1099/user_updater/raw/branch/main/install.sh | sudo bash; rm -f /tmp/get_dependencies.sh
 ```
 
-Here, the **root password** will be required,  
-after which your **user password** will be requested.
+**Install with options:**
+
+```bash
+curl -s https://codeberg.org/marvin1099/user_updater/raw/branch/main/install.sh false "" true | sudo bash
+```
+
+* `false`: disables self-updates (default is true)  
+  When enabled it will updates updater scripts.
+* `""`: leaves forced self-update setting unchanged (default is true)
+  When enabled it will force script updates.
+* `true`: enables service file reactivation (default is true)
+  When enabled will enable the systemd service file on manual update.
 
 ---
 
 ### Trust & Transparency
 
-You don’t have to trust me — or even this code.
+**user_updater** is licensed under the **AGPLv3** — it’s free, open source, and fully auditable.
 
-As mentioned in the [LICENSE](./LICENSE) file, **user_updater** is licensed under the **AGPLv3**, which means it's fully **open source** and **libre software**.
-
-That means:
-- You can read exactly what the code is doing  
-- You can modify or fork your own version  
-- You can share it with others — as long as the same freedom is preserved
-
-There’s no tracking, no hidden behavior, no proprietary lock-in.  
-If you’re ever unsure, just **read the scripts before running them** — it’s all right there.
+* No tracking
+* No hidden behavior
+* No vendor lock-in
+* Just read the scripts — everything is in plain Bash
 
 ---
 
 ### Dependencies
 
-The following tools are required (the installer will attempt to install them automatically):
+Installed automatically if possible:
 
 ```
 git awk sudo topgrade yad systemd
 ```
 
-If any can't be installed by the script, use your package manager (`pacman`, `apt`, `dnf`, etc.)  
-to install them manually, and ensure they're in your `PATH`.
+Fallback: install them using your distro’s package manager (`pacman`, `apt`, `dnf`, etc.)
 
-Standard Unix tools are also expected to be available. Most systems already include these,  
-but for reference, here’s the complete list:
+Common required Unix tools (typically preinstalled):
 
 ```
-cd mkdir dirname touch cat id rm kill who sleep read ps readlink mktemp basename useradd chown chmod passwd getent usermod tail head grep cut ls date stat yes
+cd mkdir dirname touch cat id rm kill who sleep read ps readlink mktemp basename useradd chown chmod passwd getent usermod tail head grep cut ls date stat yes tee
 ```
 
 ---
 
 ### How It Works
 
-1. **Creates a temporary user:**  
-   A locked, randomized `builder` user is created with passwordless `sudo` access — used only for running updates.
+1. **Systemd initiates the update script:**  
+   A service runs the update script in the background.
 
-2. **Systemd runs updates:**  
-   A service launches at boot as root, switches to `builder`, and silently runs `topgrade` to perform the update.
+2. **Creates a temp user:**  
+   A randomized `builder` user with passwordless sudo access, runs the updates over `topgrade`.
 
-3. **Notifies desktop users:**  
-   A simple GUI (`yad`) pops up for each logged-in desktop user, showing that updates are in progress.
+3. **GUI notifies users:**  
+   A popup appears for each logged-in desktop user.
 
-4. **Self-cleans:**  
-   Once done, the `builder` user is removed to eliminate any long-term access or risk.
+4. **Cleans up afterward:**  
+   The temporary user is deleted to remove access and risk.
 
 ---
 
 ### After Installation
 
-- **Restart or log out and back in** to activate the updater and GUI.
-- **Adding new users?**  
-  Restart once to index them, and again to show the GUI on their account.
+* **Restart or log out/in** to enable background and GUI updates.
+* Adding new users? Restart once (to register them), then again (or log out/in) for GUI activation.
 
-Even if the GUI hasn’t shown up yet, updates are still running in the background.
+To register users manually:
 
-To register new users immediately, run:
 ```bash
 sudo /var/lib/user_updater/register_updater_gui.sh
 ```
 
-To skip the second re-login step, run this **as the GUI user**:
+To launch the GUI manually (as the target user / new user):
+
 ```bash
 /home/$USER/.config/user_updater/gui_report.sh & disown
 ```
 
-Running both of these will fully skip the re-login process.  
-See below for how to manually trigger an update.
-
-Alternately run rerun `./install.sh` (see below).
+To reregister and start the gui on the running user (new user), you can also use Reinstall (see bellow).
 
 ---
 
 ### File Locations & Maintenance
 
-- App files are located in:  
+* App directory:
   `/var/lib/user_updater`
 
-- To update or reinstall the updater:  
+* Log files:
+  `/var/lib/user_updater/logs/`
+
+* Reinstall by running (The options listed at the end of the Install section can be used here as well):
+
   ```bash
   sudo /var/lib/user_updater/install.sh
   ```
 
-- To uninstall completely:  
-  ```bash
-  sudo /var/lib/user_updater/uninstall.sh
-  ```
+* Manually trigger update:
 
-- To trigger an update manually:  
   ```bash
   sudo systemctl start user_updater
+  ```
+
+* Uninstall completely:
+
+  ```bash
+  sudo /var/lib/user_updater/uninstall.sh
   ```
