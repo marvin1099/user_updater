@@ -60,9 +60,9 @@ curl -s https://codeberg.org/marvin1099/user_updater/raw/branch/main/install.sh 
 
 * `false`: disables self-updates (default is true)  
   When enabled it will updates updater scripts.
-* `""`: leaves forced self-update setting unchanged (default is true)
+* `""`: leaves forced self-update setting unchanged (default is true)  
   When enabled it will force script updates.
-* `true`: enables service file reactivation (default is true)
+* `true`: enables service file reactivation (default is true)  
   When enabled will enable the systemd service file on manual update.
 
 ---
