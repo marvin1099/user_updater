@@ -163,11 +163,6 @@ apply_setters() {
 
 # Update internal flags based on config values
 update_internal_flags() {
-    # Initialize with default values
-    up=0
-    fup=0
-    rsf=0
-
     # Set flags based on config values
     [[ "${values[self update]}" == *"t"* ]] && up=1
     [[ "${values[forced self update]}" == *"t"* ]] && fup=1
