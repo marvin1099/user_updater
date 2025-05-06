@@ -5,21 +5,50 @@ SCRIPTPATH=$(dirname "$SCRIPT")
 
 cd "$SCRIPTPATH" || exit 1
 
-loginfo=$(./main_logger.sh "" "Updater GUI" "User Updater" "${USER}update" "*")
-UUPDATER_IDATE=$(echo "$loginfo" | sed -n '1p')
-export UUPDATER_IDATE
-UUPDATER_ACTION=$(echo "$loginfo" | sed -n '2p')
-export UUPDATER_ACTION
-admin_log=$(echo "$loginfo" | sed -n '3p')
-log() {
-    echo "$1" | tee -a "$admin_log"
+log_gen() {
+    if [[ -z "$log_dir" ]]; then
+        log_dir="/var/lib/user_updater/logs"
+    fi
+    DATE="$(date '+%F_%H-%M-%S')"
+    if [[ "$first_loop" == 1 ]]; then
+        al="$admin_log"
+        pl="$PERM_LOG"
+    fi
+    admin_log="$log_dir/${DATE}_${USER}update.log"
+    PERM_LOG="$log_dir/${DATE}_${USER}updatereturn.log"
+    log() {
+        echo "$1" | tee -a "$admin_log"
+    }
+    if [[ ! -f "$admin_log" ]]; then
+        if [[ -n "$al" ]] && [[ -f "$al" ]]; then
+            mv "$al" "$admin_log"
+            log ""
+        else
+            touch "$admin_log"
+            chmod 664 "$admin_log"
+            echo "Logs are saved to \"$log_dir\""
+            log "Starting $action_string log at \"$UUPDATER_IDATE\"."
+        fi
+    else
+        log ""
+    fi
+    log "Starting $script_string script."
+    if [[ ! -f "$PERM_LOG" ]]; then
+        if [[ -n "$pl" ]] && [[ -f "$pl" ]]; then
+            mv "$pl" "$PERM_LOG"
+        else
+            touch "$PERM_LOG"
+            chmod 664 "$PERM_LOG"
+            echo "Starting Update Return Log at \"$UUPDATER_IDATE\"" >> "$PERM_LOG"
+        fi
+    fi
 }
-echo "$loginfo" | sed -n '4,$p'
+
+log_gen
 
 log "Setting monitored file."
 LOG_FILE="/tmp/topgrade-report.log"  # Path to the monitored file
-PERM_LOG="${admin_log%.*}return.log"
-echo "Starting Update Return Log at \"$UUPDATER_IDATE\"" >> "$PERM_LOG"
+first_loop=1
 
 while true
 do
@@ -30,6 +59,14 @@ do
     do
         sleep 1
     done
+    if [[ "$first_loop" == 1 ]]; then
+        log "Moving logfiles, for detected update start"
+        log_gen
+        first_loop=0
+    else
+        log "Making new logfiles, for detected update start"
+        log_gen
+    fi
 
     log "Create a pipe for the GUI window to read from."
     # Use a FIFO (named pipe) to ensure YAD gets proper input termination
@@ -132,6 +169,8 @@ do
 
     log "Making extra shure yad is closed."
     kill -9 "$YAD_PID" > /dev/null 2>&1
+
+
 
     log "End of While loop."
     log "The script will restart shortly to watch for the next updates."

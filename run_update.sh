@@ -70,10 +70,19 @@ else
     fi
 fi
 
+filter_output() {
+  sed -u \
+    -e '/^y$/d' \
+    -e 's/\x1B\[[0-9;]*[a-zA-Z]//g' \
+    -e 's/�//g'
+}
+
 # Function to run topgrade with monitoring
 run_with_watchdog() {
     log "Starting topgrade attempt $1..."
-    yes | topgrade --cleanup --no-retry >> "$logfile" 2>&1 &
+    {
+        yes | topgrade --cleanup --no-retry 2>&1 | filter_output
+    } >> "$logfile" &
     pid=$!
     msg_nr=0
     divider=1
