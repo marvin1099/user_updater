@@ -27,12 +27,15 @@ install_dir="/var/lib/user_updater"
 
 log "Setting service file location."
 SERVICE_FILE="/etc/systemd/system/user_updater.service"
+TIMER_FILE="/etc/systemd/system/user_updater.timer"
 
-log "Stopping service."
+log "Stopping services."
 systemctl stop user_updater.service
+systemctl disable --now user_updater.timer
 
-log "Removing service file."
+log "Removing service files."
 rm -f "$SERVICE_FILE"
+rm -f "$TIMER_FILE"
 
 ./delete_and_note_users.sh
 
