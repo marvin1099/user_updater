@@ -23,13 +23,22 @@ log() {
 echo "$loginfo" | sed -n '4,$p'
 
 SERVICE_FILE="/etc/systemd/system/user_updater.service"
-log "Checking if the service file \"$SERVICE_FILE\" exists."
+TIMER_FILE="/etc/systemd/system/user_updater.timer"
+
+log "Registering User Updater Service and Timer"
+
 if [[ -f "$SERVICE_FILE" ]]; then
-    status=1
+    log "Service file already exists: $SERVICE_FILE"
+    svc_exists=1
 fi
 
-log "Recreating the service file."
-# Create systemd service file
+if [[ -f "$TIMER_FILE" ]]; then
+    log "Timer file already exists: $TIMER_FILE"
+    timer_exists=1
+fi
+
+# Create or overwrite service file
+log "Writing service file."
 cat > "$SERVICE_FILE" <<EOF
 [Unit]
 Description=User Updater Service
@@ -37,27 +46,38 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=simple
-ExecStart=bash /var/lib/user_updater/user_updater.sh
-Restart=on-failure
+Type=oneshot
+ExecStart=/var/lib/user_updater/user_updater.sh
 User=root
 WorkingDirectory=/var/lib/user_updater
-
-[Install]
-WantedBy=multi-user.target
 EOF
 
-log "Reloading systemd services list."
-# Reload systemd to recognize the new service
+# Create or overwrite timer file
+log "Writing timer file."
+cat > "$TIMER_FILE" <<EOF
+[Unit]
+Description=Weekly timer for User Updater
+After=network-online.target
+Wants=network-online.target
+
+[Timer]
+OnCalendar=weekly
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+log "Reloading systemd units."
 systemctl daemon-reload
 
-# Only enable if it was not there previously
-if [[ -z "$status" ]]; then 
-    log "Enabling the service because the file was missing."
-    # Enable the service to start on boot
-    systemctl enable user_updater.service
+if [[ -z "$svc_exists" ]] || [[ -z "$timer_exists" ]]; then
+    log "Timer or Service was missing, re-enabling timer."
+    systemctl enable --now user_updater.timer
 else
-    log "Skipping starting the service because the file already existed."
+    log "Timer and Service already existed, ensuring timer runns."
+    systemctl restart user_updater.timer
 fi
-log "Service user_updater was registerd."
+
+log "Systemd registration complete: Service & Timer registered."
 
