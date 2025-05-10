@@ -71,6 +71,7 @@ EOF
 log "Reloading systemd units."
 systemctl daemon-reload
 
+systemctl disable user_updater.service 2>/dev/null
 if [[ -z "$svc_exists" ]] || [[ -z "$timer_exists" ]]; then
     log "Timer or Service was missing, re-enabling timer."
     systemctl enable --now user_updater.timer
