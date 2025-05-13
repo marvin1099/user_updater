@@ -49,6 +49,7 @@ Wants=network-online.target
 Type=oneshot
 ExecStart=/var/lib/user_updater/user_updater.sh
 User=root
+TimeoutSec=infinity
 WorkingDirectory=/var/lib/user_updater
 EOF
 
