@@ -50,7 +50,7 @@ Type=oneshot
 ExecStart=/var/lib/user_updater/user_updater.sh
 ExecStop=/var/lib/user_updater/cleanup.sh
 User=root
-TimeoutStartSec=180
+TimeoutStartSec=infinity
 TimeoutStopSec=180
 WorkingDirectory=/var/lib/user_updater
 KillMode=control-group
@@ -65,7 +65,8 @@ After=network-online.target
 Wants=network-online.target
 
 [Timer]
-OnCalendar=weekly
+OnCalendar=Thu 03:00,Sun 03:00
+RandomizedDelaySec=60
 Persistent=true
 
 [Install]
