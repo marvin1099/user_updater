@@ -44,13 +44,22 @@ cat > "$SERVICE_FILE" <<EOF
 Description=User Updater Service
 After=network-online.target
 Wants=network-online.target
+DefaultDependencies=no
+Before=shutdown.target
 
 [Service]
 Type=oneshot
 ExecStart=/var/lib/user_updater/user_updater.sh
+ExecStop=/var/lib/user_updater/cleanup.sh
 User=root
-TimeoutSec=infinity
+TimeoutStartSec=infinity
+TimeoutStopSec=180
 WorkingDirectory=/var/lib/user_updater
+RemainAfterExit=yes
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target
 EOF
 
 # Create or overwrite timer file
