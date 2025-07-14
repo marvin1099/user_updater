@@ -28,10 +28,16 @@ sudo chmod 777 "$logfile" 2>/dev/null
 sudo chown root:root "$logfile"
 
 # Ensure topgrade config directory exists
-log "Enshuring config directory \"$HOME/.config\"."
+log "Ensuring config directory \"$HOME/.config\"."
 sudo mkdir -p "$HOME/.config"
 sudo chown "$USER":"$USER" "$HOME/.config"
 sudo chmod u+rwx "$HOME/.config"
+
+# Check if topgrade command is avalible
+if ! command -v topgrade &> /dev/null; then
+    log "Error: 'topgrade' is not installed or not in PATH."
+    exit 1
+fi
 
 # Generate config if missing
 log "Generating the topgrade config \"$uptoml\"."
@@ -45,92 +51,111 @@ sudo chmod u+rwx "$uptoml"
 # Enable assume_yes in config
 log "Setting \"assume_yes\" to \"true\" in config."
 misc=0
-if grep "[misc]" "$uptoml" > /dev/null; then
-    log "The \"[misc]\" section was found in config."
+if grep "\[misc\]" "$uptoml" >/dev/null; then
     misc=1
 fi
-if grep "assume_yes =" "$uptoml" > /dev/null; then
-    log "String \"assume_yes\" was found in config."
-    if [[ $misc -eq 1 ]]
-    then
-        log "Replacing \"assume_yes\" line to \"assume_yes = true\"."
-        sed -i '/assume_yes =/c\assume_yes = true' "$uptoml" > /dev/null
+if grep "assume_yes =" "$uptoml" >/dev/null; then
+    if [[ $misc -eq 1 ]]; then
+        sed -i '/assume_yes =/c\assume_yes = true' "$uptoml"
     else
-        log "Replacing \"assume_yes\" line to \"[misc] \n assume_yes = true\"."
-        sed -i '/assume_yes =/c\[misc]\n\nassume_yes = true' "$uptoml" > /dev/null
+        sed -i '/assume_yes =/c\[misc]\n\nassume_yes = true' "$uptoml"
     fi
 else
-    if [[ $misc -eq 1 ]]
-    then
-        log "Replacing \"[misc]\" line to \"[misc] \n assume_yes = true\"."
-        sed -i '/\[misc\]/c\[misc]\n\nassume_yes = true' "$uptoml" > /dev/null
+    if [[ $misc -eq 1 ]]; then
+        sed -i '/\[misc\]/c\[misc]\n\nassume_yes = true' "$uptoml"
     else
-        log "No valid config found adding \"[misc] \n assume_yes = true\" as well as other sections used by topgrade."
-        echo $'[include]\n\n[misc]\n\nassume_yes = true\n\n[pre_commands]\n\n[post_commands]\n\n[commands]\n\n[python]\n\n[composer]\n\n[brew]\n\n[linux]\n\n[git]\n\n[windows]\n\n[npm]\n\n[yarn]\n\n[deno]\n\n[vim]\n\n[firmware]\n\n[vagrant]\n\n[flatpak]\n\n[distrobox]\n\n[containers]\n\n[lensfun]\n\n[julia]' >> "$uptoml"
+        echo $'[include]\n\n[misc]\n\nassume_yes = true\n...' >> "$uptoml"
     fi
 fi
 
+# Clean up and filter topgrade output
 filter_output() {
   sed -u \
-    -e '/^y$/d' \
+    -e '/^[[:space:]]*[yY][[:space:]]*$/d' \
     -e 's/\x1B\[[0-9;]*[a-zA-Z]//g' \
+    -e 's/\r//g' \
     -e 's/�//g'
 }
 
-# Function to run topgrade with monitoring
+# Function to run topgrade with monitoring and retry logic
 run_with_watchdog() {
-    log "Starting topgrade attempt $1..."
+    local attempt=$1
+    log "Starting topgrade attempt $attempt..."
     {
         yes | topgrade --cleanup --no-retry 2>&1 | filter_output
     } >> "$logfile" &
-    pid=$!
-    msg_nr=0
-    divider=1
+    local pid=$!
+    local msg_nr=0
+    local divider=1
 
-    while kill -0 $pid 2>/dev/null; do
+    while kill -0 "$pid" 2>/dev/null; do
         sleep 10
         last_modified=$(stat -c %Y "$logfile")
         now=$(date +%s)
         diff=$((now - last_modified))
 
-        if (( diff > (TIMEOUT_SECONDS / divider) )); then
-            if [[ $1 -eq $MAX_RETRIES ]]; then
-                msg_nr=$((msg_nr + 1))
-                if [[ $msg_nr -eq 1 ]]; then
-                    ms=$'\n'"The update seems to take longer then expected."
-                    ms+=$'\n'"If this message keeps showing up you may need to manually update."$'\n'
-                    log "$ms" | tee -a "$logfile"
-                    divider=2
-                elif [[ $msg_nr -eq 2 ]] || [[ $msg_nr -eq 3 ]]; then
-                    ms=$'\n'"The update won't seem to finsh, START A MANUAL UPDATE."
-                    ms+=$'\n'"If you don not know how to update manually ask you system admin or websearch:"
-                    name=$(awk -F'NAME=' '/NAME/ {print substr($2,2,length($2)-2)}' /etc/os-release | head -1)
-                    ms+=$'\n'"How to update $name in the terminal."
-                    ms+=$'\n'"Then open you terminal an paste the command you found online and hit enter."
-                    ms+=$'\n'"You may need to enter you password enter to start the installation and confirm by pressing Y and Enter."
-                    ms+=$'\n'"Reboot after the manual update is done."$'\n'
-                    echo "$ms" >> "$logfile"
-                    if [[ $msg_nr -eq 2 ]]; then
-                        log "$ms"
-                    fi
-                elif [[ $msg_nr -gt 4 ]]; then
-                    msg_nr=2
-                    divider=1
-                fi
-            else
+        if (( diff > TIMEOUT_SECONDS / divider )); then
+            if (( attempt < MAX_RETRIES )); then
                 log "Detected potential stalemate. Killing topgrade (PID $pid)..."
-                sudo kill -9 $pid 2>/dev/null
+                sudo kill -9 "$pid" 2>/dev/null
                 sleep 1
-                if sudo kill -0 $pid 2>/dev/null; then
+                if kill -0 "$pid" 2>/dev/null; then
                     log "Failed to kill topgrade (PID $pid)."
                 else
                     log "Successfully killed stuck topgrade (PID $pid)."
                 fi
                 return 1
+            else
+                # Last attempt: notify manual update but keep watching
+                msg_nr=$((msg_nr + 1))
+                if [[ $msg_nr -eq 1 ]]; then
+                    ms=$'\nThe update seems to take longer than expected.'
+                    ms+=$'\nIf this keeps showing up, you may need to update manually.'$'\n'
+                elif [[ $msg_nr -eq 2 ]]; then
+                    ms=$'\nThe update won\'t seem to finish, START A MANUAL UPDATE.'
+                    ms+=$'\nYou can update manually by running your distro\'s update command.'$'\n'
+                    user_tools_update
+                else
+                    ms=""
+                fi
+                if [[ -n "$ms" ]]; then
+                    log "$ms"
+                fi
+                divider=2
+                # Continue monitoring without killing
             fi
         fi
     done
+
+    # If we reach here, topgrade exited
+    wait "$pid" 2>/dev/null
+    if [[ $? -eq 0 ]]; then
+        log "Topgrade attempt $attempt finished successfully."
+    else
+        log "Topgrade attempt $attempt exited with errors."
+    fi
     return 0
+}
+
+user_tools_update() {
+    if [[ -z "$USER_TOOLS_DONE" ]]; then
+        USER_TOOLS_DONE=1
+        # If there was a gui user update their tools
+        if [[ -n "$g_user" ]]; then
+            log "" | tee -a "$logfile"
+            log "Got \"$g_user\", updating their user tools."
+            log "User tools update report log is saved at \"$logfile\"."
+            echo "Updating user tools..." >> "$logfile"
+            echo "" >>  "$logfile"
+            sudo -u "$g_user" "/home/$g_user/.config/user_updater/update_user_tools.sh" 2>&1 | tee -a "$logfile" > /dev/null
+            echo "" >>  "$logfile"
+            log "User tool updates done." | tee -a "$logfile"
+        else
+            log "" | tee -a "$logfile"
+            log "No logged in user was found." | tee -a "$logfile"
+            log "Skipping user tool updates." | tee -a "$logfile"
+        fi
+    fi
 }
 
 log "Waiting for any user to login except root."
@@ -160,6 +185,8 @@ else
     g_user="$u"
 fi
 
+USER_TOOLS_DONE=""
+
 # Try with retries
 attempt=1
 log "Running update with watchdog." | tee -a "$logfile"
@@ -176,21 +203,7 @@ done
 echo "" >> "$logfile"
 log "Topgrade system updates finished!" | tee -a "$logfile"
 
-# If there was a gui user update their tools
-if [[ -n "$g_user" ]]; then
-    log "" | tee -a "$logfile"
-    log "Got \"$g_user\", updating their user tools."
-    log "User tools update report log is saved at \"$logfile\"."
-    echo "Updating user tools..." >> "$logfile"
-    echo "" >>  "$logfile"
-    sudo -u "$g_user" "/home/$g_user/.config/user_updater/update_user_tools.sh" 2>&1 | tee -a "$logfile" > /dev/null
-    echo "" >>  "$logfile"
-    log "User tool updates done." | tee -a "$logfile"
-else
-    log "" | tee -a "$logfile"
-    log "No logged in user was found." | tee -a "$logfile"
-    log "Skipping user tool updates." | tee -a "$logfile"
-fi
+user_tools_update
 
 log ""
 log "Removing Logfile."
