@@ -80,6 +80,8 @@ filter_output() {
 # Function to run topgrade with monitoring and retry logic
 run_with_watchdog() {
     local attempt=$1
+    local before_pids
+    before_pids=$(pgrep -f auto-pacman || true)
     log "Starting topgrade attempt $attempt..."
     {
         yes | topgrade --cleanup --no-retry 2>&1 | filter_output
@@ -104,22 +106,40 @@ run_with_watchdog() {
                 else
                     log "Successfully killed stuck topgrade (PID $pid)."
                 fi
+                # Capture auto-pacman PIDs after topgrade finishes
+                local after_pids
+                after_pids=$(pgrep -f auto-pacman || true)
+
+                # Find new auto-pacman processes started during topgrade
+                local new_pids
+                new_pids=$(comm -13 <(echo "$before_pids" | sort) <(echo "$after_pids" | sort))
+
+                if [[ -n "$new_pids" ]]; then
+                    log "Detected lingering auto-pacman processes started by topgrade: $new_pids. Attempting to kill them..."
+                    for pid in $new_pids; do
+                        sudo kill -9 "$pid"
+                    done
+                    log "Killed lingering auto-pacman processes."
+                else
+                    log "No lingering auto-pacman processes detected after update."
+                fi
+
                 return 1
             else
                 # Last attempt: notify manual update but keep watching
                 msg_nr=$((msg_nr + 1))
                 if [[ $msg_nr -eq 1 ]]; then
                     ms=$'\nThe update seems to take longer than expected.'
-                    ms+=$'\nIf this keeps showing up, you may need to update manually.'$'\n'
+                    ms+=$'\nIf this keeps showing up, you may need to update manually.\n'
                 elif [[ $msg_nr -eq 2 ]]; then
                     ms=$'\nThe update won\'t seem to finish, START A MANUAL UPDATE.'
-                    ms+=$'\nYou can update manually by running your distro\'s update command.'$'\n'
-                    user_tools_update
+                    ms+=$'\nYou can update manually by running your distro\'s update command.\n'
                 else
                     ms=""
                 fi
                 if [[ -n "$ms" ]]; then
-                    log "$ms"
+                    TIMEOUT_SECONDS=20
+                    log "$ms" | tee -a "$logfile"
                 fi
                 divider=2
                 # Continue monitoring without killing
@@ -139,7 +159,7 @@ run_with_watchdog() {
 
 user_tools_update() {
     if [[ -z "$USER_TOOLS_DONE" ]]; then
-        USER_TOOLS_DONE=1
+        # USER_TOOLS_DONE=1
         # If there was a gui user update their tools
         if [[ -n "$g_user" ]]; then
             log "" | tee -a "$logfile"
@@ -185,7 +205,7 @@ else
     g_user="$u"
 fi
 
-USER_TOOLS_DONE=""
+user_tools_update
 
 # Try with retries
 attempt=1
