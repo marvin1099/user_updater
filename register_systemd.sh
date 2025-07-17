@@ -65,7 +65,8 @@ After=network-online.target
 Wants=network-online.target
 
 [Timer]
-OnCalendar=Thu 03:00,Sun 03:00
+OnCalendar=Thu 03:00
+OnCalendar=Sun 03:00
 RandomizedDelaySec=60
 Persistent=true
 
