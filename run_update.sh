@@ -77,10 +77,30 @@ filter_output() {
     -e 's/�//g'
 }
 
+# Function to remove lingering auto-pacman proesses
+kill_lingering() {
+    # Capture auto-pacman PIDs after topgrade finishes
+    local after_pids
+    after_pids=$(pgrep -f auto-pacman || true)
+
+    # Find new auto-pacman processes started during topgrade
+    local new_pids
+    new_pids=$(comm -13 <(echo "$before_pids" | sort) <(echo "$after_pids" | sort))
+
+    if [[ -n "$new_pids" ]]; then
+        log "Detected lingering auto-pacman processes started by topgrade: $new_pids. Attempting to kill them..."
+        for pid in $new_pids; do
+            sudo kill -9 "$pid"
+        done
+        log "Killed lingering auto-pacman processes."
+    else
+        log "No lingering auto-pacman processes detected after update."
+    fi
+}
+
 # Function to run topgrade with monitoring and retry logic
 run_with_watchdog() {
     local attempt=$1
-    local before_pids
     before_pids=$(pgrep -f auto-pacman || true)
     log "Starting topgrade attempt $attempt..."
     {
@@ -106,23 +126,7 @@ run_with_watchdog() {
                 else
                     log "Successfully killed stuck topgrade (PID $pid)."
                 fi
-                # Capture auto-pacman PIDs after topgrade finishes
-                local after_pids
-                after_pids=$(pgrep -f auto-pacman || true)
-
-                # Find new auto-pacman processes started during topgrade
-                local new_pids
-                new_pids=$(comm -13 <(echo "$before_pids" | sort) <(echo "$after_pids" | sort))
-
-                if [[ -n "$new_pids" ]]; then
-                    log "Detected lingering auto-pacman processes started by topgrade: $new_pids. Attempting to kill them..."
-                    for pid in $new_pids; do
-                        sudo kill -9 "$pid"
-                    done
-                    log "Killed lingering auto-pacman processes."
-                else
-                    log "No lingering auto-pacman processes detected after update."
-                fi
+                kill_lingering
 
                 return 1
             else
@@ -154,6 +158,8 @@ run_with_watchdog() {
     else
         log "Topgrade attempt $attempt exited with errors."
     fi
+    kill_lingering
+
     return 0
 }
 
