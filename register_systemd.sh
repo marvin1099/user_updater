@@ -48,9 +48,12 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 ExecStart=/var/lib/user_updater/user_updater.sh
+ExecStop=/var/lib/user_updater/cleanup.sh
 User=root
-TimeoutSec=infinity
+TimeoutStartSec=infinity
+TimeoutStopSec=180
 WorkingDirectory=/var/lib/user_updater
+KillMode=control-group
 EOF
 
 # Create or overwrite timer file
@@ -62,7 +65,9 @@ After=network-online.target
 Wants=network-online.target
 
 [Timer]
-OnCalendar=weekly
+OnCalendar=Thu 03:00
+OnCalendar=Sun 03:00
+RandomizedDelaySec=60
 Persistent=true
 
 [Install]
