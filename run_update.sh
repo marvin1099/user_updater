@@ -136,8 +136,19 @@ run_with_watchdog() {
                     ms=$'\nThe update seems to take longer than expected.'
                     ms+=$'\nIf this keeps showing up, you may need to update manually.\n'
                 elif [[ $msg_nr -eq 2 ]]; then
-                    ms=$'\nThe update won\'t seem to finish, START A MANUAL UPDATE.'
-                    ms+=$'\nYou can update manually by running your distro\'s update command.\n'
+                    Distro=$(awk -F= '/^NAME=/{gsub(/"/, "", $2); print $2}' /etc/os-release 2>/dev/null)
+                    if [[ ! "$Distro" =~ [Ll]inux$ ]]; then
+                        if [[ -n "$Distro" ]]; then
+                            Distro+=" "
+                        else
+                            Distro+="[YOUR LINUX SYSTEM NAME] "
+                        fi
+                        Distro+="Linux"
+                    fi
+                    ms=$'The update won\'t seem to finish. START A MANUAL UPDATE.'
+                    ms+=$'\nYou can update manually by running your Linux distro\'s update command.'
+                    ms+=$'\nTry websearching:  "How to update on '"$Distro"
+                    ms+=$'\nIf you\'re unsure, ask your system administrator for help.' #'
                 else
                     ms=""
                 fi
