@@ -64,4 +64,6 @@ log "Copying uninstaller log to /tmp and deleting main updater install directory
 log ""
 cat "$admin_log" >> /tmp/user_updater_uninstaller.log
 
-rm -rf "$install_dir"
+if [[ "$1" != "soft" ]]; then
+    rm -rf "$install_dir"
+fi
