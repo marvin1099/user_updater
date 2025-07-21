@@ -104,7 +104,7 @@ if [[ -n "$SUDO_USER" ]]; then
             kill -9 "$g_pid"
         fi
         log "Launching new gui_report.sh process for $SUDO_USER..."
-        sudo -u "$SUDO_USER" UUPDATER_IDATE="$UUPDATER_IDATE" UUPDATER_ACTION="$UUPDATER_ACTION" "$report_gui" & disown
+        sudo -u "$SUDO_USER" setsid env UUPDATER_IDATE="$UUPDATER_IDATE" UUPDATER_ACTION="$UUPDATER_ACTION" "$report_gui" >/dev/null 2>&1 &
         log "Starting user_updater systemd service..."
         systemctl start user_updater.service
     else
