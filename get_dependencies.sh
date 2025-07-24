@@ -41,6 +41,7 @@ declare -A deps=(
     [topgrade]="topgrade"
     [yad]="yad"
     [systemd]="systemctl"
+    [findutils]="find"
 )
 
 log "Detecting package manager."
