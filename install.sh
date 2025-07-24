@@ -98,15 +98,15 @@ if [[ -n "$SUDO_USER" ]]; then
     log "The test GUI reported an exit code of \"$rep\"."
     if [[ $rep -eq 70 && -f "$report_gui" ]]; then
         log "GUI test successful. Preparing to start updates..."
-        g_pid=$(ps aux | awk '/gui_report.sh/ && !/awk/ {if ($1 == "'"$SUDO_USER"'" && $11 ~ "bash" && $12 ~ "user_updater/gui_report.sh") print $2}' | head -n 1)
+        g_pid=$(ps aux | awk '/gui_report.sh/ && !/awk/ {if ($1 == "'"$SUDO_USER"'" && $11 ~ "bash" && $12 ~ "user_updater/gui_report.sh") print $2}' | head -n 1) #'
         if [[ -n $g_pid ]]; then
             log "Killing existing gui_report.sh process (PID: $g_pid)..."
             kill -9 "$g_pid"
         fi
         log "Launching new gui_report.sh process for $SUDO_USER..."
         sudo -u "$SUDO_USER" setsid env UUPDATER_IDATE="$UUPDATER_IDATE" UUPDATER_ACTION="$UUPDATER_ACTION" "$report_gui" >/dev/null 2>&1 &
-        log "Starting user_updater systemd service..."
-        systemctl start user_updater.service
+        log "Starting user_updater systemd service in the backround..."
+        setsid systemctl start user_updater.service &
     else
         log "GUI report not started, either GUI not available or gui_report.sh missing."
     fi
@@ -114,5 +114,5 @@ else
     log "No SUDO_USER found, skipping GUI integration."
 fi
 
-log "Installation and script update process complete."
+log "Installation process complete."
 log ""
