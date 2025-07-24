@@ -147,7 +147,7 @@ run_with_watchdog() {
                     fi
                     ms=$'The update won\'t seem to finish. START A MANUAL UPDATE.'
                     ms+=$'\nYou can update manually by running your Linux distro\'s update command.'
-                    ms+=$'\nTry websearching:  "How to update on '"$Distro"
+                    ms+=$'\nTry websearching:  "How to update on: $Distro"
                     ms+=$'\nIf you\'re unsure, ask your system administrator for help.' #'
                 else
                     ms=""
