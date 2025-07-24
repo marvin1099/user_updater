@@ -66,4 +66,18 @@ cat "$admin_log" >> /tmp/user_updater_uninstaller.log
 
 if [[ "$1" != "soft" ]]; then
     rm -rf "$install_dir"
+elif command -v find >/dev/null 2>&1; then
+    # List of items to keep
+    keep_list=("cleanup.sh" "delete_and_note_users.sh" "find_gui_user.sh" "get_dependencies.sh" "gui_report.sh" "install.sh" "main_logger.sh" "make_builder_user.sh" "register_systemd.sh" "register_updater_gui.sh" "run_update.sh" "self_update.sh" "uninstall.sh" "update_user_tools.sh" "user_updater.sh")
+
+    # First, remove everything except those in keep_list
+    find "$install_dir" -mindepth 1 $(printf "! -name %q " "${keep_list[@]}") -exec rm -rf {} +
+
+    # Then, check if the folder is now empty
+    if [ -z "$(find "$install_dir" -mindepth 1)" ]; then
+        rm -r "$install_dir"
+    fi
+else
+    log "Find is not installed, soft arg is ignored, removing all installed files."
+    rm -rf "$install_dir"
 fi
