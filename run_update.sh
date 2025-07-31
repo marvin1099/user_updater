@@ -149,7 +149,7 @@ run_with_watchdog() {
                     ms+=$'\nYou can update manually by running your Linux distro\'s update command.'
                     ms+=$'\nTry websearching: "How to update on $Distro"'
                     ms+=$'\nIf you\'re unsure, ask your system administrator for help.'
-                    ms+=$'\nClose this window with the command: sudo systemctl stop user_updater &'
+                    ms+=$'\nClose this window with the command: sudo /var/lib/user_updater/cleanup.sh &'
                 else
                     ms=""
                 fi
