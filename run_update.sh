@@ -19,7 +19,7 @@ echo "$loginfo" | sed -n '4,$p'
 logfile="/tmp/topgrade-report.log"
 uptoml="$HOME/.config/topgrade.toml"
 MAX_RETRIES=3
-TIMEOUT_SECONDS=60
+TIMEOUT_SECONDS=90
 
 # Prepare log file
 log "Preparing Update logfile \"$logfile\"."
