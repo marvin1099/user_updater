@@ -52,6 +52,8 @@ ExecStop=/var/lib/user_updater/cleanup.sh
 User=root
 TimeoutStartSec=infinity
 TimeoutStopSec=180
+Restart=on-failure
+RestartSec=10
 WorkingDirectory=/var/lib/user_updater
 KillMode=control-group
 EOF
