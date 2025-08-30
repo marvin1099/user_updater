@@ -63,6 +63,7 @@ log "Navigating to parrent of install directory."
 cd "$(dirname "$install_dir")" || exit 1
 
 if [[ $git -eq 0 ]]; then
+    [[ -d "$install_dir" ]] && rm -rf "$install_dir"
     log "Trying to Clone user_updater repository..."
     if ! git clone https://codeberg.org/marvin1099/user_updater
     then
