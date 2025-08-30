@@ -27,5 +27,5 @@ echo "$loginfo" | sed -n '4,$p'
 log "Cleaning report file"
 rm -f /tmp/topgrade-report.log
 
-log "Killing Service if running"
-setsid bash -c "sleep 1; systemctl is-active user_updater.service | awk '/activ/ && !/inactiv/' | grep -q . && systemctl kill user_updater.service 2>/dev/null" &
+#log "Killing Service if running"
+#setsid bash -c "sleep 1; systemctl is-active user_updater.service | awk '/activ/ && !/inactiv/' | grep -q . && systemctl kill user_updater.service 2>/dev/null" &
