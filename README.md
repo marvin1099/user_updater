@@ -3,6 +3,9 @@
 A simple tool for automatic system updates using [`topgrade`](https://github.com/topgrade-rs/topgrade),
 featuring a background systemd service and lightweight GUI to notify users during updates.
 
+> [!WARNING]
+> This script is unreliable and may result in problems, so it should only be used as a learning resource.
+
 > Unix-like systems only.  
 > macOS *may* work, but it’s not officially supported.
 
