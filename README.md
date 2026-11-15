@@ -1,167 +1,103 @@
-## **user_updater**
+# User Updater
 
-A simple tool for automatic system updates using [`topgrade`](https://github.com/topgrade-rs/topgrade),
-featuring a background systemd service and lightweight GUI to notify users during updates.
+User Updater is a Python and Qt application for scheduled Linux updates. An administrator can install a machine-wide service that updates the system and opted-in tools for active desktop users. A separate user install updates only the current user's tools.
 
-> [!WARNING]
-> This script is unreliable and may result in problems, so it should only be used as a learning resource.
+Before each scheduled update, the desktop client gives users a response window. A user may start immediately or request one of the reschedules allowed by administrator policy. If nobody responds, the update proceeds automatically. While updates run, a small frameless window warns users not to power off; closing the window never cancels the worker.
 
-> Unix-like systems only.  
-> macOS *may* work, but it’s not officially supported.
+## Requirements
 
----
+- Linux with systemd and a local X11 or Wayland desktop for the Qt client
+- Python 3.11 or newer
+- [`uv`](https://docs.astral.sh/uv/) for installation and development
+- [`topgrade`](https://github.com/topgrade-rs/topgrade) installed separately for machine-wide update runs
+- `sudo` and `visudo` for the temporary system-update builder account
 
-### Features
+The application does not install operating-system packages for you. Install `topgrade` and the required native tools using your distribution's package manager, then check the environment with `user-updater doctor`.
 
-* Automatic system updates via [`topgrade`](https://github.com/topgrade-rs/topgrade)
-* Desktop GUI notifications (using `yad`)
-* Temporary passwordless `builder` user (name is randomized)
-* Secure by default — `builder` (temporary admin) has no login access and is removed after use
-* Systemd-based background service
-* Per-user autostart for GUI
-* Unobtrusive during normal use
+## Installation
 
----
+### Machine-wide (administrator)
 
-### Why It’s Great for Casual Linux Users
+From a trusted checkout of this repository, install the Python application system-wide and then create its systemd integration:
 
-Many users forget to update or aren’t comfortable using the terminal.
-**user_updater** solves that by:
-
-* Updating the system in the background — no terminal needed (after install)
-* Showing a popup while updates run, so you know not to reboot
-* Keeping your system safe with zero input
-
-Safe by design:
-
-* Runs updates as a temporary system user
-* Doesn’t require repeated password prompts (only on first install)
-* Deletes the `builder` (temporary admin) user after each update
-
----
-
-### Install
-
-**Simple install (requires sudo):**
-
-```bash
-curl -s https://codeberg.org/marvin1099/user_updater/raw/branch/main/install.sh | sudo bash
+```console
+sudo uv tool install --system .
+sudo user-updater install --system
 ```
 
-Don’t have sudo yet?  
-Use this instead (requires root password first):
+The install creates a persistent systemd timer and service, an administrator policy at `/etc/user_updater/project.yaml`, shared state under `/var/lib/user_updater`, and an XDG autostart entry in `/etc/xdg/autostart` so every desktop user gets the response/status client. It preserves an existing policy on reinstall.
 
-```bash
-curl -fsS https://codeberg.org/marvin1099/user_updater/raw/branch/main/get_dependencies.sh -o /tmp/get_dependencies.sh && chmod +x /tmp/get_dependencies.sh && su -c "/tmp/get_dependencies.sh" && curl -fsS https://codeberg.org/marvin1099/user_updater/raw/branch/main/install.sh | sudo bash; rm -f /tmp/get_dependencies.sh
+System mode requires a root-owned, non-group/world-writable Python installation. This avoids running privileged update code from a user-writable checkout. Do not install this mode from untrusted source.
+
+### User-only
+
+For a personal install that never performs machine-wide package updates:
+
+```console
+uv tool install .
+user-updater install --user
 ```
 
-**Install with options:**
+This creates a `systemd --user` timer and a per-user desktop autostart entry. Its default policy disables system updates and enables configured user-tool updates. The user manager must be running for the timer to fire; a normal desktop login starts it.
 
-```bash
-curl -s https://codeberg.org/marvin1099/user_updater/raw/branch/main/install.sh false "" true | sudo bash
+### Development checkout
+
+```console
+uv sync --all-groups
+uv run user-updater doctor
+uv run user-updater demo
 ```
 
-* `false`: disables self-updates (default is true)  
-  When enabled it will updates updater scripts.
-* `""`: leaves forced self-update setting unchanged (default is true)  
-  When enabled it will force script updates.
-* `true`: enables service file reactivation (default is true)  
-  When enabled will enable the systemd service file on manual update.
+The demo uses simulated state and never invokes package managers or requests administrator privileges.
 
----
+## Administrator policy
 
-### Trust & Transparency
+The checked-in [`project.yaml`](project.yaml) is the default policy. System installation copies its defaults to `/etc/user_updater/project.yaml` only when no policy exists. Validate a policy with:
 
-**user_updater** is licensed under the **AGPLv3** — it’s free, open source, and fully auditable.
-
-* No tracking
-* No hidden behavior
-* No vendor lock-in
-* Just read the scripts — everything is in plain Bash
-
----
-
-### Dependencies
-
-Installed automatically if possible:
-
-```
-git awk sudo topgrade yad systemd
+```console
+user-updater validate-policy /etc/user_updater/project.yaml
 ```
 
-Fallback: install them using your distro’s package manager (`pacman`, `apt`, `dnf`, etc.)
+Default behavior:
 
-Common required Unix tools (typically preinstalled):
+- Schedule: Thursday and Sunday at 03:00 local time.
+- Response window: 5 minutes. No response means proceed.
+- Reschedule choices: 1, 4, or 24 hours; at most two reschedules per scheduled run.
+- System updates run through `topgrade` under a short-lived, non-login builder account. By default, its passwordless sudo rule is limited to the detected native package-manager executable.
+- Active local graphical users can have their configured per-user tools updated separately.
 
-```
-cd mkdir dirname touch cat id rm kill who sleep read ps readlink mktemp basename useradd chown chmod passwd getent usermod tail head grep cut ls date stat yes tee
-```
+Set `interaction.allow_deferral: false` to remove rescheduling while retaining the response window. `interaction.deferral_options_hours` and `interaction.max_deferrals_per_run` can further limit rescheduling. `security.builder_sudo_mode: unrestricted` grants the temporary builder unrestricted passwordless sudo for the duration of the run; the default is the restricted `package-manager` mode.
 
----
+Unknown policy keys and invalid values are rejected. User-mode execution always disables system updates even if a local policy attempts to enable them.
 
-### How It Works
+## Commands
 
-1. **Systemd initiates the update script:**  
-   A service runs the update script in the background.
+| Command | Purpose |
+| --- | --- |
+| `user-updater status --system` | Show machine-wide update state |
+| `user-updater gui --system` | Open the machine-wide desktop client |
+| `user-updater tick --system` | Run one scheduler check; normally invoked by systemd |
+| `user-updater status --user` | Show this user's update state |
+| `user-updater gui --user` | Open this user's desktop client |
+| `user-updater demo` | Preview the Qt flow with simulated updates |
+| `user-updater doctor` | Check runtime dependencies |
+| `user-updater uninstall --system` | Remove systemd/autostart integration, preserving policy and state |
+| `user-updater uninstall --system --purge` | Also remove the policy and stored state |
 
-2. **Creates a temp user:**  
-   A randomized `builder` user with passwordless sudo access, runs the updates over `topgrade`.
+Uninstall the user integration with `user-updater uninstall --user`; add `--purge` to remove its local policy and state as well.
 
-3. **GUI notifies users:**  
-   A popup appears for each logged-in desktop user.
+Worker output is available through the system or user journal. The application serializes workers and cleans abandoned temporary builder accounts and sudoers entries before starting a later system update.
 
-4. **Cleans up afterward:**  
-   The temporary user is deleted to remove access and risk.
+## Tests and lint
 
----
+The suite mocks account, systemd, updater, and desktop-session boundaries; Qt tests use the offscreen platform and do not alter the host system:
 
-### After Installation
-
-* **Restart or log out/in** to enable background and GUI updates.
-* Adding new users? Restart once (to register them), then again (or log out/in) for GUI activation.
-
-To register users manually:
-
-```bash
-sudo /var/lib/user_updater/register_updater_gui.sh
-```
-
-To launch the GUI manually (as the target user / new user):
-
-```bash
-/home/$USER/.config/user_updater/gui_report.sh & disown
+```console
+QT_QPA_PLATFORM=offscreen uv run pytest -q
+uv run ruff check src tests
+uv build
 ```
 
-To reregister and start the gui on the running user (new user), you can also use Reinstall (see bellow).
+## License
 
----
-
-### File Locations & Maintenance
-
-* Reinstall by running (The options listed at the end of the Install section can be used here as well):
-
-  ```bash
-  sudo /var/lib/user_updater/install.sh
-  ```
-
-* Manually trigger update:
-
-  ```bash
-  sudo systemctl start user_updater
-  ```
-
-* App directory:
-  ```bash
-  /var/lib/user_updater
-  ```
-
-* Log files:
-  ```bash
-  /var/lib/user_updater/logs/
-  ```
-
-* Uninstall completely (removes all logs, exept /tmp/user_updater_uninstaller.log):
-
-  ```bash
-  sudo /var/lib/user_updater/uninstall.sh
-  ```
+Licensed under the GNU Affero General Public License v3. See [`LICENSE`](LICENSE).

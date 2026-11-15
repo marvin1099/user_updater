@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -17,13 +18,12 @@ _DEFAULTS: dict[str, Any] = {
         "days": ["thu", "sun"],
         "time": "03:00",
         "response_minutes": 5,
-        "check_interval_minutes": 5,
+        "check_interval_minutes": 1,
     },
     "interaction": {
         "allow_deferral": True,
         "deferral_options_hours": [1, 4, 24],
         "max_deferrals_per_run": 2,
-        "show_running_window": True,
     },
     "updates": {
         "run_system": True,
@@ -51,7 +51,6 @@ class InteractionPolicy:
     allow_deferral: bool
     deferral_options_hours: tuple[int, ...]
     max_deferrals_per_run: int
-    show_running_window: bool
 
 
 @dataclass(frozen=True)
@@ -101,9 +100,21 @@ def check_deferral(policy: Policy, hours: int, deferrals_used: int) -> bool:
     """Return whether an individual deferral request is allowed by admin policy."""
     return (
         policy.interaction.allow_deferral
+        and isinstance(hours, int)
+        and not isinstance(hours, bool)
         and hours in policy.interaction.deferral_options_hours
+        and isinstance(deferrals_used, int)
+        and not isinstance(deferrals_used, bool)
         and 0 <= deferrals_used < policy.interaction.max_deferrals_per_run
     )
+
+
+def default_policy_text(user_mode: bool = False) -> str:
+    """Render the bundled default policy for a system or user-only install."""
+    defaults = copy.deepcopy(_DEFAULTS)
+    if user_mode:
+        defaults["updates"]["run_system"] = False
+    return yaml.safe_dump(defaults, sort_keys=False)
 
 
 def _merge_checked(default: dict[str, Any], override: dict[str, Any], path: str) -> dict[str, Any]:
@@ -142,7 +153,11 @@ def _make_policy(raw: dict[str, Any]) -> Policy:
     if not isinstance(clock, str) or len(clock) != 5 or clock[2] != ":":
         raise PolicyError("schedule.time must use HH:MM 24-hour format")
     hour, minute = clock.split(":", 1)
-    if not hour.isdigit() or not minute.isdigit() or not (0 <= int(hour) <= 23 and 0 <= int(minute) <= 59):
+    if (
+        not hour.isdigit()
+        or not minute.isdigit()
+        or not (0 <= int(hour) <= 23 and 0 <= int(minute) <= 59)
+    ):
         raise PolicyError("schedule.time must use a valid HH:MM 24-hour time")
 
     schedule = SchedulePolicy(
@@ -177,9 +192,6 @@ def _make_policy(raw: dict[str, Any]) -> Policy:
             "interaction.max_deferrals_per_run",
             minimum=0,
             maximum=10,
-        ),
-        show_running_window=_boolean(
-            interaction_raw["show_running_window"], "interaction.show_running_window"
         ),
     )
 

@@ -4,7 +4,6 @@ import pytest
 
 from user_updater.policy import PolicyError, check_deferral, load_policy
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -78,3 +77,9 @@ interaction:
 
     with pytest.raises(PolicyError, match="unknown"):
         load_policy(config)
+
+
+def test_boolean_is_not_accepted_as_an_integer_deferral() -> None:
+    policy = load_policy(PROJECT_ROOT / "project.yaml")
+
+    assert check_deferral(policy, hours=True, deferrals_used=0) is False

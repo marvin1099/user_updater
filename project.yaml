@@ -6,13 +6,12 @@ schedule:
   days: [thu, sun]
   time: "03:00"
   response_minutes: 5
-  check_interval_minutes: 5
+  check_interval_minutes: 1
 
 interaction:
   allow_deferral: true
   deferral_options_hours: [1, 4, 24]
   max_deferrals_per_run: 2
-  show_running_window: true
 
 updates:
   run_system: true
