@@ -1,0 +1,23 @@
+# Administrator policy. The system installer copies this to
+# /etc/user_updater/project.yaml. Users may request only the deferrals allowed here.
+version: 1
+
+schedule:
+  days: [thu, sun]
+  time: "03:00"
+  response_minutes: 5
+  check_interval_minutes: 5
+
+interaction:
+  allow_deferral: true
+  deferral_options_hours: [1, 4, 24]
+  max_deferrals_per_run: 2
+  show_running_window: true
+
+updates:
+  run_system: true
+  run_user_tools: true
+  user_tools: [flatpak, pipx, pip, npm, cargo, gem]
+
+security:
+  builder_sudo_mode: package-manager

@@ -1,3 +1,11 @@
-builder_usernames.txt
-user_updater.conf
-logs/
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.py[cod]
+dist/
+build/
+*.egg-info/
+user_updater.log
+state.json
+request.json
