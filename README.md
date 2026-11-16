@@ -2,7 +2,7 @@
 
 User Updater is a Python and Qt application for scheduled Linux updates. A machine-wide installation schedules system updates separately from each logged-in user's personal tools. The two jobs have independent schedules and response prompts, and run concurrently when both are due. A user-only installation updates only the current user's tools.
 
-Before each scheduled update, the desktop client gives users a response window. A user may start immediately or request one of the reschedules allowed by administrator policy. If nobody responds, the update proceeds automatically. The compact frameless window can expand to a two-tab, read-only output view with elapsed time. Closing either view never cancels a worker. The application requests bottom-right placement, but Wayland compositors may intentionally ignore client positioning requests.
+Before each scheduled update, the desktop client gives users a response window. A user may start immediately or request one of the reschedules allowed by administrator policy. If nobody responds, the update proceeds automatically. The compact frameless window can expand to a two-tab, read-only output view with elapsed time. Closing either view never cancels a worker.
 
 ## Requirements
 
@@ -25,7 +25,7 @@ sudo uv tool install --system .
 sudo user-updater install --system
 ```
 
-The install creates a persistent systemd timer and service, an administrator policy at `/etc/user_updater/project.yaml`, shared state under `/var/lib/user_updater`, rotating logs under `/var/log/user-updater`, and an XDG autostart entry in `/etc/xdg/autostart` so every desktop user gets the response/status client. It preserves an existing policy on reinstall. The desktop client's **Admin settings** action opens a polkit authentication prompt before showing settings; only the narrow policy-writing command runs with administrator privileges.
+The install creates a persistent systemd timer and service, an administrator policy at `/etc/user_updater/project.yaml`, shared state under `/var/lib/user_updater`, rotating logs under `/var/log/user-updater`, and a system-wide XDG autostart entry in `/etc/xdg/autostart`. That global entry is picked up at graphical login by existing users and users added later; adding a user does not require reinstalling the updater or copying a per-user autostart file. It preserves an existing policy on reinstall. The desktop client's **Admin settings** action opens a polkit authentication prompt before showing settings; only the narrow policy-writing command runs with administrator privileges.
 
 System mode requires a root-owned, non-group/world-writable Python installation. This avoids running privileged update code from a user-writable checkout. Do not install this mode from untrusted source.
 
@@ -72,7 +72,13 @@ Set `interaction.allow_deferral: false` to remove rescheduling while retaining t
 
 Unknown policy keys and invalid values are rejected. User-mode execution always disables system updates even if a local policy attempts to enable them.
 
-The minimal desktop view has separate controls for system and personal-tool updates. **Full details** opens System updates and User tools tabs with read-only command output and elapsed time. On a Wayland desktop, final window placement remains compositor-controlled.
+The minimal desktop view has separate controls for system and personal-tool updates. **Full details** opens System updates and User tools tabs with read-only command output and elapsed time.
+
+### Wayland window placement
+
+- On KDE Plasma Wayland, the client uses [`kdotool`](https://github.com/jinliu/kdotool), when installed, to request bottom-right placement through KWin. It is an optional desktop utility; without it, Qt's normal best-effort placement is used.
+- On other Wayland compositors that advertise `wlr-layer-shell`, an optional native LayerShellQt bridge anchors both views at the bottom-right with a 20-pixel margin. This uses a top-layer surface rather than a normal task-switcher window; keyboard focus remains on-demand. The bridge is built when the build machine has CMake, Qt 6 Widgets, Python development headers, and LayerShellQt development files. It is enabled only when its Qt major/minor version matches PySide6 at runtime. If the native development files are absent or versions mismatch, the application uses normal Qt windows.
+- Compositors without layer-shell support retain their normal window-placement policy. The updater's update, admin, and user-hook behavior is independent of these display integrations.
 
 ## Commands
 
@@ -92,13 +98,15 @@ Uninstall the user integration with `user-updater uninstall --user`; add `--purg
 
 Worker output is available through the system or user journal and a rotating log file (up to five 10 MiB backups). System logs are in `/var/log/user-updater/updater.log`; user-only logs are in `~/.local/state/user_updater/updater.log`. The application uses separate locks and state for system and per-user tasks, and cleans abandoned temporary builder accounts and sudoers entries before starting a later system update.
 
+If a worker is interrupted while its state says `running`, the next scheduler tick records the run as failed, preserves its run ID, start time, and recent output, and advances to the next normal scheduled occurrence. It does not immediately replay an update that may have partially changed the system. Invalid persisted state is rejected rather than interpreted as permission to run an update. See [reliability testing](docs/reliability-testing.md) for the VM checklist.
+
 ## Tests and lint
 
 The suite mocks account, systemd, updater, and desktop-session boundaries; Qt tests use the offscreen platform and do not alter the host system:
 
 ```console
 QT_QPA_PLATFORM=offscreen uv run pytest -q
-uv run ruff check src tests
+uv run ruff check src tests setup.py
 uv build
 ```
 

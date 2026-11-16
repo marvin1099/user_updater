@@ -88,6 +88,41 @@ def test_worker_lock_prevents_a_second_manual_or_scheduled_run(tmp_path: Path) -
     assert workflow.calls == 0
 
 
+def test_service_recovers_interrupted_run_and_does_not_replay_it(tmp_path: Path) -> None:
+    state_store = StateStore(tmp_path / "state.json")
+    state_store.save(
+        UpdateState(
+            phase="running",
+            run_id="crashed-run",
+            scheduled_for=(NOW - timedelta(minutes=10)).isoformat(),
+            started_at=(NOW - timedelta(minutes=5)).isoformat(),
+            last_output=("Updating package database",),
+        )
+    )
+    workflow = FakeWorkflow()
+    messages: list[str] = []
+    service = UpdateService(
+        load_policy(),
+        state_store,
+        workflow,
+        on_log=messages.append,
+        lock_file=tmp_path / "locks" / "worker.lock",
+    )
+
+    action = service.tick(NOW)
+
+    assert action.value == "recovered_interrupted_run"
+    assert state_store.load().phase == "failed"
+    assert state_store.load().run_id == "crashed-run"
+    assert any("interrupted while running" in message for message in messages)
+    assert workflow.calls == 0
+
+    next_action = service.tick(NOW + timedelta(minutes=1))
+
+    assert next_action.value == "not_due"
+    assert workflow.calls == 0
+
+
 def test_system_task_reads_only_its_own_response_file(tmp_path: Path) -> None:
     policy = load_policy()
     user_home = tmp_path / "alice"

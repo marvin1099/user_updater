@@ -9,6 +9,17 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+_PHASES = {"idle", "awaiting_response", "deferred", "running", "succeeded", "failed"}
+_OPTIONAL_TEXT_FIELDS = {
+    "next_scheduled_at",
+    "run_id",
+    "scheduled_for",
+    "response_deadline",
+    "deferred_until",
+    "started_at",
+    "finished_at",
+}
+
 
 class StateError(ValueError):
     """Raised when persisted update state is malformed."""
@@ -38,6 +49,21 @@ class UpdateState:
         if unknown:
             raise StateError(f"unknown state field: {sorted(unknown)[0]}")
         values = dict(raw)
+        phase = values.get("phase", "idle")
+        if not isinstance(phase, str) or phase not in _PHASES:
+            raise StateError(f"invalid state phase: {phase!r}")
+        for name in _OPTIONAL_TEXT_FIELDS:
+            value = values.get(name)
+            if value is not None and not isinstance(value, str):
+                raise StateError(f"{name} must be a string or null")
+        if not isinstance(values.get("message", "Waiting for the next scheduled update."), str):
+            raise StateError("message must be a string")
+        deferrals_used = values.get("deferrals_used", 0)
+        if type(deferrals_used) is not int or deferrals_used < 0:
+            raise StateError("deferrals_used must be a non-negative integer")
+        returncode = values.get("returncode")
+        if returncode is not None and type(returncode) is not int:
+            raise StateError("returncode must be an integer or null")
         output = values.get("last_output", [])
         if not isinstance(output, list) or any(not isinstance(line, str) for line in output):
             raise StateError("last_output must be a list of strings")

@@ -49,13 +49,18 @@ class UpdateCoordinator:
             self.state_store.save(
                 UpdateState(
                     phase="failed",
+                    run_id=state.run_id,
                     scheduled_for=state.scheduled_for,
                     next_scheduled_at=self._next_scheduled_at(now).isoformat(),
                     deferrals_used=state.deferrals_used,
+                    started_at=state.started_at,
                     finished_at=now.isoformat(),
                     message=(
-                        "The previous update worker stopped unexpectedly; no duplicate was started."
+                        "The previous update run was interrupted while running. "
+                        "It may have made partial changes; no immediate retry was started. "
+                        "Review the output before the next scheduled run."
                     ),
+                    last_output=state.last_output,
                 )
             )
             return TickAction.RECOVERED_INTERRUPTED_RUN

@@ -1,6 +1,9 @@
+import json
 from pathlib import Path
 
-from user_updater.state import StateStore, UpdateState
+import pytest
+
+from user_updater.state import StateError, StateStore, UpdateState
 
 
 def test_state_store_round_trips_and_atomically_replaces_state(tmp_path: Path) -> None:
@@ -22,3 +25,25 @@ def test_state_store_round_trips_and_atomically_replaces_state(tmp_path: Path) -
 
 def test_missing_state_starts_with_idle_state(tmp_path: Path) -> None:
     assert StateStore(tmp_path / "state.json").load() == UpdateState()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("phase", "half-running"),
+        ("phase", 2),
+        ("run_id", 42),
+        ("message", None),
+        ("deferrals_used", -1),
+        ("deferrals_used", True),
+        ("returncode", "0"),
+    ],
+)
+def test_state_store_rejects_invalid_field_types_and_values(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps({field: value}), encoding="utf-8")
+
+    with pytest.raises(StateError):
+        StateStore(path).load()

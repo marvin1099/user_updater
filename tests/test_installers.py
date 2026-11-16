@@ -12,7 +12,28 @@ class FakeSystemd:
         self.calls.append([*arguments, f"check={check}"] if not check else list(arguments))
 
 
-def test_system_install_creates_admin_policy_service_timer_and_all_user_autostart(
+def test_system_autostart_applies_to_users_added_after_install(tmp_path: Path) -> None:
+    paths = InstallPaths(
+        policy_file=tmp_path / "etc" / "user_updater" / "project.yaml",
+        state_dir=tmp_path / "var" / "lib" / "user_updater",
+        unit_dir=tmp_path / "systemd" / "system",
+        autostart_dir=tmp_path / "etc" / "xdg" / "autostart",
+        log_file=tmp_path / "log" / "updater.log",
+        executable=Path("/usr/local/bin/user-updater"),
+    )
+    SystemInstaller(paths, systemd=FakeSystemd()).install()
+
+    global_entry = paths.autostart_dir / "user-updater.desktop"
+    future_user_home = tmp_path / "home" / "added-after-install"
+    future_user_home.mkdir(parents=True)
+
+    assert "Exec=/usr/local/bin/user-updater gui --system" in global_entry.read_text(
+        encoding="utf-8"
+    )
+    assert not (future_user_home / ".config" / "autostart" / global_entry.name).exists()
+
+
+def test_system_install_creates_admin_policy_service_timer_and_global_autostart(
     tmp_path: Path,
 ) -> None:
     paths = InstallPaths(

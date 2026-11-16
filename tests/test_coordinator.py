@@ -150,6 +150,37 @@ def test_admin_can_disable_deferral_without_skipping_the_prompt(tmp_path: Path) 
     assert coordinator.tick(NOW + timedelta(minutes=5)) is TickAction.RUN
 
 
+def test_interrupted_run_is_recorded_without_an_immediate_retry(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "state.json")
+    started_at = NOW - timedelta(minutes=10)
+    store.save(
+        UpdateState(
+            phase="running",
+            run_id="interrupted-run",
+            scheduled_for=(NOW - timedelta(minutes=15)).isoformat(),
+            next_scheduled_at=(NOW - timedelta(minutes=15)).isoformat(),
+            started_at=started_at.isoformat(),
+            last_output=("Installing package A", "Package A configured"),
+        )
+    )
+    coordinator = UpdateCoordinator(load_policy(), store)
+
+    action = coordinator.tick(NOW)
+
+    recovered = store.load()
+    assert action is TickAction.RECOVERED_INTERRUPTED_RUN
+    assert recovered.phase == "failed"
+    assert recovered.run_id == "interrupted-run"
+    assert recovered.started_at == started_at.isoformat()
+    assert recovered.finished_at == NOW.isoformat()
+    assert recovered.returncode is None
+    assert recovered.next_scheduled_at is not None
+    assert datetime.fromisoformat(recovered.next_scheduled_at) > NOW
+    assert recovered.last_output == ("Installing package A", "Package A configured")
+    assert "partial changes" in recovered.message
+    assert "no immediate retry" in recovered.message
+
+
 def _store_due_now(tmp_path: Path) -> StateStore:
     store = StateStore(tmp_path / "state.json")
     store.save(UpdateState(next_scheduled_at=NOW.isoformat()))

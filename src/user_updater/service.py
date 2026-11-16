@@ -84,6 +84,8 @@ class UpdateService:
         state = self.state_store.load()
         requests = self._read_requests(state.run_id) if state.phase == "awaiting_response" else []
         action = self.coordinator.tick(current, requests)
+        if action is TickAction.RECOVERED_INTERRUPTED_RUN:
+            self.on_log(self.state_store.load().message)
         if action is not TickAction.RUN:
             return action
 

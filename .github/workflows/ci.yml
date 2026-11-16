@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --locked --all-groups
+      - run: uv run ruff check src tests setup.py
+      - run: uv run pytest -q
+        env:
+          QT_QPA_PLATFORM: offscreen
+
+  package:
+    name: Build and install wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --locked --all-groups
+      - run: uv build
+      - name: Install built wheel outside the checkout
+        run: |
+          uv venv "$RUNNER_TEMP/user-updater-wheel"
+          uv pip install --python "$RUNNER_TEMP/user-updater-wheel/bin/python" dist/*.whl
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/user-updater-wheel/bin/user-updater" --help
+          "$RUNNER_TEMP/user-updater-wheel/bin/python" -c \
+            'import user_updater; import user_updater.gui.placement; print(user_updater.__file__)'
+          "$RUNNER_TEMP/user-updater-wheel/bin/python" - <<'PY'
+          import os
+          from pathlib import Path
+          from user_updater.installer import _system_service_unit, _timer_unit, _user_service_unit
+
+          root = Path(os.environ["RUNNER_TEMP"]) / "user-updater-unit-verify"
+          root.mkdir(parents=True, exist_ok=True)
+          executable = Path(os.environ["RUNNER_TEMP"]) / "user-updater-wheel/bin/user-updater"
+          units = {
+              "user-updater.service": _system_service_unit(executable),
+              "user-updater.timer": _timer_unit(1),
+              "user-updater-user.service": _user_service_unit(executable),
+              "user-updater-user.timer": _timer_unit(1, user=True),
+          }
+          for name, content in units.items():
+              (root / name).write_text(content, encoding="utf-8")
+          print(root)
+          PY
+          systemd-analyze verify "$RUNNER_TEMP"/user-updater-unit-verify/*.service "$RUNNER_TEMP"/user-updater-unit-verify/*.timer

@@ -7,7 +7,6 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
-    QApplication,
     QComboBox,
     QHBoxLayout,
     QLabel,
@@ -19,6 +18,7 @@ from PySide6.QtWidgets import (
 from ..policy import Policy
 from ..requests import UserRequest, save_request
 from ..state import StateError, StateStore, UpdateState
+from .placement import WindowPlacement
 
 
 class _TaskPanel(QWidget):
@@ -145,7 +145,9 @@ class UpdaterWindow(QWidget):
         self._phase = "idle"
         self._full_mode = False
         self._dismissed_runs: set[tuple[str, str | None]] = set()
+        self.setWindowTitle("User Updater Status")
         self._build_ui(request_file, system_request_file, admin_enabled)
+        self._placement = WindowPlacement(self, title=self.windowTitle())
         if start_timer:
             self._poll_timer = QTimer(self)
             self._poll_timer.timeout.connect(self.refresh)
@@ -250,6 +252,7 @@ class UpdaterWindow(QWidget):
             self._phase = "failed"
             if not self._full_mode:
                 self.show()
+                QTimer.singleShot(0, self._position_window)
             return
 
         if not self.policy.updates.run_user_tools and user_state.phase != "running":
@@ -338,11 +341,7 @@ class UpdaterWindow(QWidget):
                 QTimer.singleShot(30_000, lambda phase=self._phase: self._hide_if_phase(phase))
 
     def _position_window(self) -> None:
-        screen = QApplication.primaryScreen()
-        if screen is None:
-            return
-        available = screen.availableGeometry()
-        self.move(available.right() - self.width() - 20, available.bottom() - self.height() - 20)
+        self._placement.position_bottom_right()
 
     def _hide_if_phase(self, expected_phase: str) -> None:
         if self._phase == expected_phase and not self._full_mode:
