@@ -20,6 +20,7 @@ def test_system_install_creates_admin_policy_service_timer_and_all_user_autostar
         state_dir=tmp_path / "var" / "lib" / "user_updater",
         unit_dir=tmp_path / "systemd" / "system",
         autostart_dir=tmp_path / "xdg" / "autostart",
+        log_file=tmp_path / "log" / "updater.log",
         executable=Path("/usr/local/bin/user-updater"),
     )
     systemd = FakeSystemd()
@@ -35,6 +36,9 @@ def test_system_install_creates_admin_policy_service_timer_and_all_user_autostar
     assert "OnUnitActiveSec=1min" in timer
     assert "Exec=/usr/local/bin/user-updater gui --system" in autostart
     assert policy.updates.run_system is True
+    assert (paths.state_dir / "users").is_dir()
+    assert (paths.state_dir / "locks").is_dir()
+    assert paths.log_file.parent.is_dir()
     assert systemd.calls[-1] == ["enable", "--now", "user-updater.timer"]
 
 
@@ -46,6 +50,7 @@ def test_system_reinstall_preserves_admin_policy_and_uninstall_preserves_data(
         state_dir=tmp_path / "var" / "state",
         unit_dir=tmp_path / "systemd",
         autostart_dir=tmp_path / "autostart",
+        log_file=tmp_path / "log" / "updater.log",
         executable=Path("/usr/local/bin/user-updater"),
     )
     systemd = FakeSystemd()

@@ -6,6 +6,8 @@ schedule:
   days: [thu, sun]
   time: "03:00"
   response_minutes: 5
+  user_tools_interval_hours: 24
+  user_tools_response_minutes: 5
   check_interval_minutes: 1
 
 interaction:
@@ -17,6 +19,7 @@ updates:
   run_system: true
   run_user_tools: true
   user_tools: [flatpak, pipx, pip, npm, cargo, gem]
+  allow_custom_user_tools: true
 
 security:
   builder_sudo_mode: package-manager

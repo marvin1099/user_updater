@@ -10,20 +10,22 @@ from pathlib import Path
 class AppPaths:
     policy: Path
     state: Path
+    user_state_dir: Path
     builder_home: Path
     sudoers: Path
     request: Path
-    log: Path
+    log_file: Path
 
 
 def system_paths(home: Path | None = None) -> AppPaths:
     return AppPaths(
         policy=Path("/etc/user_updater/project.yaml"),
         state=Path("/var/lib/user_updater/state.json"),
+        user_state_dir=Path("/var/lib/user_updater/users"),
         builder_home=Path("/var/lib/user_updater/builders"),
         sudoers=Path("/etc/sudoers.d"),
-        request=Path(home or Path.home()) / ".local/state/user_updater/request.json",
-        log=Path("/var/lib/user_updater/update.log"),
+        request=Path(home or Path.home()) / ".local/state/user_updater/requests/user-tools.json",
+        log_file=Path("/var/log/user-updater/updater.log"),
     )
 
 
@@ -33,9 +35,10 @@ def user_paths(home: Path | None = None) -> AppPaths:
     state = user_home / ".local/state/user_updater"
     return AppPaths(
         policy=config / "project.yaml",
-        state=state / "state.json",
+        state=state / "user-tools.json",
+        user_state_dir=state,
         builder_home=state / "builders",
         sudoers=Path("/etc/sudoers.d"),
-        request=state / "request.json",
-        log=state / "update.log",
+        request=state / "requests" / "user-tools.json",
+        log_file=state / "updater.log",
     )

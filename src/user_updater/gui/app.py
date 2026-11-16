@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+import os
+import pwd
+from pathlib import Path
+
 from PySide6.QtGui import QAction, QIcon
 from PySide6.QtWidgets import QApplication, QMenu, QStyle, QSystemTrayIcon
 
 from ..paths import system_paths, user_paths
 from ..policy import load_policy
+from ..requests import task_request_path
 from ..state import StateStore
+from .admin import open_admin_settings
+from .full_window import FullDetailsWindow
 from .window import UpdaterWindow
 
 
@@ -15,9 +22,54 @@ def run_gui(system_mode: bool = False) -> int:
     application = QApplication.instance() or QApplication([])
     application.setApplicationName("User Updater")
     application.setQuitOnLastWindowClosed(False)
-    paths = system_paths() if system_mode else user_paths()
+    home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+    paths = system_paths(home) if system_mode else user_paths(home)
     policy = load_policy(paths.policy if paths.policy.exists() else None)
-    window = UpdaterWindow(policy, StateStore(paths.state), paths.request)
+    user_state_path = paths.user_state_dir / f"{os.getuid()}.json" if system_mode else paths.state
+    user_state = StateStore(user_state_path, file_mode=0o644 if system_mode else 0o600)
+    system_state = StateStore(paths.state) if system_mode else None
+    user_request = task_request_path(home, "user-tools")
+    system_request = task_request_path(home, "system") if system_mode else None
+    window = UpdaterWindow(
+        policy,
+        user_state,
+        user_request,
+        system_state_store=system_state,
+        system_request_file=system_request,
+        admin_enabled=system_mode,
+    )
+    full_window = FullDetailsWindow(
+        system_state,
+        user_state,
+        system_enabled=system_mode and policy.updates.run_system,
+        user_tools_enabled=policy.updates.run_user_tools,
+    )
+
+    def show_full_details() -> None:
+        window.set_full_mode(True)
+        full_window.refresh()
+        full_window.show()
+        full_window.position_bottom_right()
+        full_window.raise_()
+        full_window.activateWindow()
+
+    def return_to_minimal() -> None:
+        window.show_status()
+
+    def finish_full_details() -> None:
+        full_window.hide()
+        window.show_status()
+
+    def policy_saved(updated_policy) -> None:
+        window.apply_policy(updated_policy)
+        full_window.system_enabled = system_mode and updated_policy.updates.run_system
+        full_window.user_tools_enabled = updated_policy.updates.run_user_tools
+        full_window.refresh()
+
+    window.full_mode_requested.connect(show_full_details)
+    window.admin_requested.connect(lambda: open_admin_settings(window, paths.policy, policy_saved))
+    full_window.back_requested.connect(return_to_minimal)
+    full_window.all_updates_done.connect(finish_full_details)
 
     tray: QSystemTrayIcon | None = None
     if QSystemTrayIcon.isSystemTrayAvailable():

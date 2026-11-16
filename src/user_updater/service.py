@@ -15,7 +15,7 @@ from typing import Protocol
 
 from .coordinator import TickAction, UpdateCoordinator
 from .policy import Policy
-from .requests import UserRequest, load_request, request_path
+from .requests import UserRequest, load_request, request_path, task_request_path
 from .schedule import local_timezone
 from .state import StateStore
 from .workflow import WorkflowResult
@@ -43,14 +43,23 @@ class UpdateService:
         clock: Callable[[], datetime] | None = None,
         on_log: Callable[[str], None] = print,
         lock_file: Path | None = None,
+        task_id: str = "update",
+        interval_hours: int | None = None,
+        response_minutes: int | None = None,
     ) -> None:
         self.state_store = state_store
-        self.coordinator = UpdateCoordinator(policy, state_store)
+        self.coordinator = UpdateCoordinator(
+            policy,
+            state_store,
+            interval_hours=interval_hours,
+            response_minutes=response_minutes,
+        )
         self.workflow = workflow
         self.request_homes = request_homes or local_request_homes
         self.clock = clock or (lambda: datetime.now(local_timezone()))
         self.on_log = on_log
         self.lock_file = Path(lock_file) if lock_file is not None else None
+        self.task_id = task_id
 
     def tick(self, now: datetime | None = None) -> TickAction:
         if self.lock_file is None:
@@ -104,7 +113,11 @@ class UpdateService:
             return []
         requests: list[UserRequest] = []
         for account in self.request_homes():
-            path = request_path(account.home)
+            path = (
+                request_path(account.home)
+                if self.task_id == "update"
+                else task_request_path(account.home, self.task_id)
+            )
             request = load_request(path, account.uid, run_id)
             try:
                 metadata = path.lstat()

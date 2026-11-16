@@ -4,18 +4,21 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import json
 import os
 import pwd
 import shutil
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from .accounts import BuilderAccountManager
 from .coordinator import TickAction
 from .installer import InstallPaths, SystemInstaller, UserInstaller, UserInstallPaths
+from .logging_config import configure_logging
 from .paths import system_paths, user_paths
-from .policy import PolicyError, load_policy
+from .policy import PolicyError, load_policy, write_policy
 from .service import RequestHome, UpdateService, local_request_homes
 from .sessions import DesktopUser, detect_graphical_users
 from .state import StateError, StateStore
@@ -51,6 +54,8 @@ def build_parser() -> argparse.ArgumentParser:
     commands.add_parser("doctor", help="Check runtime dependencies without changing the system")
     policy = commands.add_parser("validate-policy", help="Validate an administrator YAML policy")
     policy.add_argument("path", nargs="?", type=Path)
+    commands.add_parser("admin-auth-check", help="Authenticate the administrator settings action")
+    commands.add_parser("admin-policy-write", help="Internal administrator policy writer")
     return parser
 
 
@@ -92,6 +97,12 @@ def main(argv: list[str] | None = None) -> int:
                 f"{loaded.schedule.response_minutes} minutes."
             )
             return 0
+        if args.command == "admin-auth-check":
+            _require_root("administrator settings")
+            return 0
+        if args.command == "admin-policy-write":
+            _require_root("administrator policy update")
+            return _write_admin_policy()
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or "").strip() if isinstance(exc.stderr, str) else ""
         print(
@@ -148,48 +159,109 @@ def _tick(system_mode: bool) -> int:
     paths = system_paths() if system_mode else user_paths()
     if system_mode:
         _require_root("machine-wide update service")
+    logger = configure_logging(paths.log_file, private=not system_mode)
     policy = load_policy(paths.policy if paths.policy.exists() else None)
-    if not system_mode:
-        policy = dataclasses.replace(
+    jobs: list[tuple[str, UpdateService, StateStore]] = []
+    state_mode = 0o644 if system_mode else 0o600
+
+    if system_mode and policy.updates.run_system:
+        system_policy = dataclasses.replace(
+            policy,
+            updates=dataclasses.replace(
+                policy.updates,
+                run_user_tools=False,
+                allow_custom_user_tools=False,
+            ),
+        )
+        system_store = StateStore(paths.state, file_mode=state_mode)
+        builder = BuilderAccountManager(paths.builder_home, paths.sudoers, system_policy)
+        system_workflow = UpdateWorkflow(
+            system_policy,
+            builder_manager=builder,
+            session_detector=lambda: [],
+        )
+        jobs.append(
+            (
+                "system",
+                UpdateService(
+                    system_policy,
+                    system_store,
+                    system_workflow,
+                    request_homes=local_request_homes,
+                    on_log=logger.info,
+                    task_id="system",
+                    lock_file=paths.state.parent / "locks" / "system.lock",
+                ),
+                system_store,
+            )
+        )
+
+    desktop_users: list[DesktopUser] = []
+    if policy.updates.run_user_tools:
+        desktop_users = detect_graphical_users() if system_mode else [_current_desktop_user()]
+    if desktop_users:
+        user_policy = dataclasses.replace(
             policy,
             updates=dataclasses.replace(policy.updates, run_system=False),
         )
-    state_store = StateStore(paths.state, file_mode=0o644 if system_mode else 0o600)
-    builder = (
-        BuilderAccountManager(paths.builder_home, paths.sudoers, policy) if system_mode else None
-    )
-    if system_mode:
-        session_detector = detect_graphical_users
-        request_homes = local_request_homes
-    else:
-        current_user = _current_desktop_user()
+        for user in desktop_users:
+            user_state_path = (
+                paths.user_state_dir / f"{user.uid}.json" if system_mode else paths.state
+            )
+            user_store = StateStore(user_state_path, file_mode=state_mode)
 
-        def session_detector() -> list[DesktopUser]:
-            return [current_user]
+            def sessions_for_user(selected: DesktopUser = user) -> list[DesktopUser]:
+                return [selected]
 
-        def request_homes() -> list[RequestHome]:
-            return [RequestHome(current_user.home, current_user.uid)]
+            def request_homes_for_user(selected: DesktopUser = user) -> list[RequestHome]:
+                return [RequestHome(selected.home, selected.uid)]
 
-    workflow = UpdateWorkflow(
-        policy=policy,
-        builder_manager=builder,
-        session_detector=session_detector,
-    )
-    service = UpdateService(
-        policy,
-        state_store,
-        workflow,
-        request_homes=request_homes,
-        lock_file=paths.state.parent / "worker.lock",
-    )
-    action = service.tick()
-    state = state_store.load()
-    print(f"Scheduler: {action.value} — {state.message}")
-    if action is TickAction.RECOVERED_INTERRUPTED_RUN:
-        return 1
-    if state.phase == "failed" and state.returncode not in (None, 0):
-        return 1
-    return 0
+            user_workflow = UpdateWorkflow(
+                user_policy,
+                builder_manager=None,
+                session_detector=sessions_for_user,
+            )
+            jobs.append(
+                (
+                    f"user-tools:{user.username}",
+                    UpdateService(
+                        user_policy,
+                        user_store,
+                        user_workflow,
+                        request_homes=request_homes_for_user,
+                        on_log=logger.info,
+                        task_id="user-tools",
+                        interval_hours=policy.schedule.user_tools_interval_hours,
+                        response_minutes=policy.schedule.user_tools_response_minutes,
+                        lock_file=(paths.state.parent / "locks" / f"user-tools-{user.uid}.lock"),
+                    ),
+                    user_store,
+                )
+            )
+
+    if not jobs:
+        logger.info("No update tasks are enabled or due for a logged-in user.")
+        return 0
+
+    failed = False
+    with ThreadPoolExecutor(max_workers=min(16, len(jobs))) as pool:
+        futures = {
+            pool.submit(service.tick): (name, state_store) for name, service, state_store in jobs
+        }
+        for future in as_completed(futures):
+            name, state_store = futures[future]
+            action = future.result()
+            state = state_store.load()
+            logger.info(
+                "task=%s scheduler=%s phase=%s message=%s",
+                name,
+                action.value,
+                state.phase,
+                state.message,
+            )
+            failed = failed or action is TickAction.RECOVERED_INTERRUPTED_RUN
+            failed = failed or (state.phase == "failed" and state.returncode not in (None, 0))
+    return int(failed)
 
 
 def _status(system_mode: bool) -> int:
@@ -204,6 +276,18 @@ def _status(system_mode: bool) -> int:
         print(f"Next scheduled time: {state.next_scheduled_at}")
     if state.last_output:
         print("\n".join(state.last_output[-10:]))
+    if system_mode:
+        for user_state_path in sorted(paths.user_state_dir.glob("*.json")):
+            try:
+                username = pwd.getpwuid(int(user_state_path.stem)).pw_name
+            except (ValueError, KeyError):
+                username = f"uid {user_state_path.stem}"
+            try:
+                user_state = StateStore(user_state_path).load()
+            except StateError as exc:
+                print(f"\n{username} user-tool updates: {exc}")
+                continue
+            print(f"\n{username} user-tool updates: {user_state.phase}\n{user_state.message}")
     return 0
 
 
@@ -212,6 +296,7 @@ def _doctor() -> int:
         "systemd": shutil.which("systemctl"),
         "topgrade": shutil.which("topgrade"),
         "visudo": shutil.which("visudo"),
+        "pkexec": shutil.which("pkexec"),
         "Qt desktop": "PySide6" if _pyside_available() else None,
     }
     failed = False
@@ -226,6 +311,27 @@ def _doctor() -> int:
             "enabling system updates."
         )
     return int(failed)
+
+
+def _write_admin_policy() -> int:
+    executable = Path(sys.argv[0])
+    if not executable.is_absolute():
+        executable = Path.cwd() / executable
+    _require_trusted_system_install(executable.absolute())
+    encoded = sys.stdin.read(65_537)
+    if len(encoded) > 65_536:
+        raise ValueError("administrator policy payload is too large")
+    raw = json.loads(encoded)
+    saved = write_policy(Path("/etc/user_updater/project.yaml"), raw)
+    logger = configure_logging(Path("/var/log/user-updater/updater.log"))
+    logger.info(
+        "administrator policy changed: system=%s user_tools=%s interval_hours=%d custom_tools=%s",
+        saved.updates.run_system,
+        saved.updates.run_user_tools,
+        saved.schedule.user_tools_interval_hours,
+        saved.updates.allow_custom_user_tools,
+    )
+    return 0
 
 
 def _current_desktop_user() -> DesktopUser:
@@ -249,13 +355,14 @@ def _executable_path() -> Path:
 
 
 def _require_trusted_system_install(executable: Path) -> None:
-    for path in (executable, Path(__file__).resolve()):
-        metadata = path.stat()
-        if metadata.st_uid != 0 or metadata.st_mode & 0o022:
-            raise RuntimeError(
-                "system mode requires a root-owned, non-writable installation; "
-                "install with `sudo uv tool install --system .` first"
-            )
+    for installed_file in (executable.resolve(), Path(__file__).resolve()):
+        for path in (installed_file, *installed_file.parents):
+            metadata = path.stat()
+            if metadata.st_uid != 0 or metadata.st_mode & 0o022:
+                raise RuntimeError(
+                    "system mode requires a root-owned, non-writable installation; "
+                    "install with `sudo uv tool install --system .` first"
+                )
 
 
 def _require_root(action: str) -> None:

@@ -35,6 +35,7 @@ class InstallPaths:
     state_dir: Path = Path("/var/lib/user_updater")
     unit_dir: Path = Path("/etc/systemd/system")
     autostart_dir: Path = Path("/etc/xdg/autostart")
+    log_file: Path = Path("/var/log/user-updater/updater.log")
     executable: Path = Path("/usr/local/bin/user-updater")
 
 
@@ -76,6 +77,12 @@ class SystemInstaller:
         paths.policy_file.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
         paths.state_dir.mkdir(mode=0o755, parents=True, exist_ok=True)
         paths.state_dir.chmod(0o755)
+        (paths.state_dir / "users").mkdir(mode=0o755, exist_ok=True)
+        (paths.state_dir / "users").chmod(0o755)
+        (paths.state_dir / "locks").mkdir(mode=0o700, exist_ok=True)
+        (paths.state_dir / "locks").chmod(0o700)
+        paths.log_file.parent.mkdir(mode=0o750, parents=True, exist_ok=True)
+        paths.log_file.parent.chmod(0o750)
         if not paths.policy_file.exists():
             _atomic_write(paths.policy_file, default_policy_text(), 0o644)
         policy = load_policy(paths.policy_file)
@@ -109,6 +116,7 @@ class SystemInstaller:
         self.systemd.run(["daemon-reload"], check=False)
         if purge:
             shutil.rmtree(self.paths.state_dir, ignore_errors=True)
+            shutil.rmtree(self.paths.log_file.parent, ignore_errors=True)
             self.paths.policy_file.unlink(missing_ok=True)
 
 

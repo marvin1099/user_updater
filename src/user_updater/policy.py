@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import copy
+import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -18,6 +20,8 @@ _DEFAULTS: dict[str, Any] = {
         "days": ["thu", "sun"],
         "time": "03:00",
         "response_minutes": 5,
+        "user_tools_interval_hours": 24,
+        "user_tools_response_minutes": 5,
         "check_interval_minutes": 1,
     },
     "interaction": {
@@ -29,6 +33,7 @@ _DEFAULTS: dict[str, Any] = {
         "run_system": True,
         "run_user_tools": True,
         "user_tools": list(_USER_TOOLS),
+        "allow_custom_user_tools": True,
     },
     "security": {"builder_sudo_mode": "package-manager"},
 }
@@ -43,6 +48,8 @@ class SchedulePolicy:
     days: tuple[str, ...]
     time: str
     response_minutes: int
+    user_tools_interval_hours: int
+    user_tools_response_minutes: int
     check_interval_minutes: int
 
 
@@ -58,6 +65,7 @@ class UpdatePolicy:
     run_system: bool
     run_user_tools: bool
     user_tools: tuple[str, ...]
+    allow_custom_user_tools: bool
 
 
 @dataclass(frozen=True)
@@ -87,13 +95,76 @@ def load_policy(path: Path | None = None) -> Policy:
         except yaml.YAMLError as exc:
             raise PolicyError(f"invalid YAML in {source}: {exc}") from exc
 
+    return validate_policy_data(raw)
+
+
+def validate_policy_data(raw: Any) -> Policy:
+    """Validate a policy mapping supplied by an administrator UI or helper."""
     if raw is None:
         raw = {}
     if not isinstance(raw, dict):
         raise PolicyError("policy must be a YAML mapping")
-
     merged = _merge_checked(_DEFAULTS, raw, "policy")
     return _make_policy(merged)
+
+
+def policy_to_mapping(policy: Policy) -> dict[str, Any]:
+    """Convert a validated policy to plain YAML/JSON-compatible values."""
+    return {
+        "version": policy.version,
+        "schedule": {
+            "days": list(policy.schedule.days),
+            "time": policy.schedule.time,
+            "response_minutes": policy.schedule.response_minutes,
+            "user_tools_interval_hours": policy.schedule.user_tools_interval_hours,
+            "user_tools_response_minutes": policy.schedule.user_tools_response_minutes,
+            "check_interval_minutes": policy.schedule.check_interval_minutes,
+        },
+        "interaction": {
+            "allow_deferral": policy.interaction.allow_deferral,
+            "deferral_options_hours": list(policy.interaction.deferral_options_hours),
+            "max_deferrals_per_run": policy.interaction.max_deferrals_per_run,
+        },
+        "updates": {
+            "run_system": policy.updates.run_system,
+            "run_user_tools": policy.updates.run_user_tools,
+            "user_tools": list(policy.updates.user_tools),
+            "allow_custom_user_tools": policy.updates.allow_custom_user_tools,
+        },
+        "security": {"builder_sudo_mode": policy.security.builder_sudo_mode},
+    }
+
+
+def write_policy(path: Path, raw: Any, file_mode: int = 0o644) -> Policy:
+    """Validate and atomically replace a policy file."""
+    policy = validate_policy_data(raw)
+    path = Path(path)
+    path.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+    if path.parent.is_symlink():
+        raise PolicyError("policy directory must not be a symbolic link")
+    rendered = yaml.safe_dump(policy_to_mapping(policy), sort_keys=False)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", delete=False
+        ) as stream:
+            temporary_path = Path(stream.name)
+            os.fchmod(stream.fileno(), file_mode)
+            stream.write(rendered)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary_path, path)
+        os.chmod(path, file_mode)
+        directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    except OSError as exc:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+        raise PolicyError(f"cannot write policy {path}: {exc}") from exc
+    return policy
 
 
 def check_deferral(policy: Policy, hours: int, deferrals_used: int) -> bool:
@@ -166,6 +237,18 @@ def _make_policy(raw: dict[str, Any]) -> Policy:
         response_minutes=_integer(
             schedule_raw["response_minutes"], "schedule.response_minutes", minimum=1, maximum=60
         ),
+        user_tools_interval_hours=_integer(
+            schedule_raw["user_tools_interval_hours"],
+            "schedule.user_tools_interval_hours",
+            minimum=1,
+            maximum=720,
+        ),
+        user_tools_response_minutes=_integer(
+            schedule_raw["user_tools_response_minutes"],
+            "schedule.user_tools_response_minutes",
+            minimum=1,
+            maximum=60,
+        ),
         check_interval_minutes=_integer(
             schedule_raw["check_interval_minutes"],
             "schedule.check_interval_minutes",
@@ -206,6 +289,9 @@ def _make_policy(raw: dict[str, Any]) -> Policy:
         run_system=_boolean(updates_raw["run_system"], "updates.run_system"),
         run_user_tools=_boolean(updates_raw["run_user_tools"], "updates.run_user_tools"),
         user_tools=tools,
+        allow_custom_user_tools=_boolean(
+            updates_raw["allow_custom_user_tools"], "updates.allow_custom_user_tools"
+        ),
     )
 
     security_raw = raw["security"]

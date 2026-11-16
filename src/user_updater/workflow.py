@@ -68,6 +68,7 @@ class UpdateWorkflow:
                     self.policy.updates.user_tools,
                     lambda line, name=user.username: on_output(f"[{name}] {line}"),
                     on_idle,
+                    allow_custom_tools=self.policy.updates.allow_custom_user_tools,
                 )
                 for result in results:
                     user_results.append((user.username, result))

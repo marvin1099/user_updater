@@ -1,4 +1,4 @@
-"""Frameless update prompt and running-status window."""
+"""Minimal frameless prompt/status window for the desktop user."""
 
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
     QLabel,
-    QProgressBar,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -22,10 +21,111 @@ from ..requests import UserRequest, save_request
 from ..state import StateError, StateStore, UpdateState
 
 
+class _TaskPanel(QWidget):
+    def __init__(
+        self,
+        title: str,
+        policy: Policy,
+        request_file: Path,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.title = title
+        self.policy = policy
+        self.request_file = Path(request_file)
+        self._state = UpdateState()
+        self._request_sent = False
+        self._run_id: str | None = None
+
+        self.status = QLabel(f"{title}: waiting")
+        self.status.setWordWrap(True)
+        self.countdown = QLabel("")
+        self.defer_choice = QComboBox()
+        self.defer_button = QPushButton("Reschedule")
+        self.update_now_button = QPushButton("Update now")
+        self.update_now_button.setObjectName("primary")
+        controls = QHBoxLayout()
+        controls.addWidget(self.defer_choice, stretch=1)
+        controls.addWidget(self.defer_button)
+        controls.addWidget(self.update_now_button)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 4, 8, 4)
+        layout.addWidget(self.status)
+        layout.addWidget(self.countdown)
+        layout.addLayout(controls)
+
+        self.defer_button.clicked.connect(self._submit_defer)
+        self.update_now_button.clicked.connect(self._submit_start_now)
+        self.hide()
+
+    def apply_state(self, state: UpdateState) -> None:
+        self._state = state
+        if state.run_id != self._run_id:
+            self._run_id = state.run_id
+            self._request_sent = False
+        if state.phase != "awaiting_response":
+            self._request_sent = False
+
+        self.status.setText(
+            f"{self.title}: {state.phase.replace('_', ' ').title()} — {state.message}"
+        )
+        show_panel = (
+            state.phase != "idle" or bool(state.last_output) or state.next_scheduled_at is not None
+        )
+        self.setVisible(show_panel)
+        response_open = state.phase == "awaiting_response"
+        self.countdown.setVisible(response_open)
+        self.defer_choice.setVisible(response_open)
+        self.defer_button.setVisible(response_open)
+        self.update_now_button.setVisible(response_open)
+        if response_open:
+            remaining = _remaining_seconds(state.response_deadline)
+            if remaining is None:
+                self.countdown.setText("No response means the update starts automatically.")
+            else:
+                minutes, seconds = divmod(remaining, 60)
+                self.countdown.setText(f"Automatic start in {minutes}:{seconds:02d}.")
+            allowed = (
+                self.policy.interaction.allow_deferral
+                and state.deferrals_used < self.policy.interaction.max_deferrals_per_run
+                and bool(self.policy.interaction.deferral_options_hours)
+            )
+            self.defer_choice.clear()
+            for hours in self.policy.interaction.deferral_options_hours:
+                self.defer_choice.addItem(_duration_label(hours), hours)
+            self.defer_choice.setVisible(allowed)
+            self.defer_button.setVisible(allowed)
+            for control in (self.defer_choice, self.defer_button, self.update_now_button):
+                control.setEnabled(not self._request_sent)
+            if self._request_sent:
+                self.status.setText(f"{self.title}: response sent; waiting for the updater.")
+
+    def _submit_defer(self) -> None:
+        hours = self.defer_choice.currentData()
+        if self._state.run_id is None or hours is None:
+            return
+        self._save(UserRequest(self._state.run_id, "defer", int(hours)))
+
+    def _submit_start_now(self) -> None:
+        if self._state.run_id is None:
+            return
+        self._save(UserRequest(self._state.run_id, "start_now"))
+
+    def _save(self, request: UserRequest) -> None:
+        try:
+            save_request(self.request_file, request)
+            self._request_sent = True
+            self.apply_state(self._state)
+        except (OSError, ValueError) as exc:
+            self.status.setText(f"{self.title}: could not send response: {exc}")
+
+
 class UpdaterWindow(QWidget):
-    """Small, titleless status window that cannot hide an active update."""
+    """One compact prompt for both independent system and per-user jobs."""
 
     phase_changed = Signal(str)
+    full_mode_requested = Signal()
+    admin_requested = Signal()
 
     def __init__(
         self,
@@ -33,225 +133,242 @@ class UpdaterWindow(QWidget):
         state_store: StateStore,
         request_file: Path,
         start_timer: bool = True,
+        *,
+        system_state_store: StateStore | None = None,
+        system_request_file: Path | None = None,
+        admin_enabled: bool = False,
     ) -> None:
         super().__init__(None)
         self.policy = policy
         self.state_store = state_store
-        self.request_file = Path(request_file)
+        self.system_state_store = system_state_store
         self._phase = "idle"
-        self._request_sent = False
-        self._current_run_id: str | None = None
-        self._dismissed_run_id: str | None = None
-        self._build_ui()
+        self._full_mode = False
+        self._dismissed_runs: set[tuple[str, str | None]] = set()
+        self._build_ui(request_file, system_request_file, admin_enabled)
         if start_timer:
             self._poll_timer = QTimer(self)
             self._poll_timer.timeout.connect(self.refresh)
             self._poll_timer.start(1000)
         self.refresh()
 
-    def _build_ui(self) -> None:
+    def _build_ui(
+        self,
+        request_file: Path,
+        system_request_file: Path | None,
+        admin_enabled: bool,
+    ) -> None:
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.Tool
         )
-        self.setFixedSize(480, 190)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setFixedSize(540, 350 if self.system_state_store is not None else 250)
         self.setStyleSheet(
             "QWidget { background: #20242b; color: #f2f4f8; }"
             "QLabel#heading { font-size: 16px; font-weight: 700; }"
             "QLabel#message { color: #d2d8e0; }"
-            "QPushButton { padding: 7px 12px; border-radius: 4px; }"
+            "QPushButton { padding: 6px 10px; border-radius: 4px; }"
             "QPushButton#primary { background: #2778c4; color: white; }"
-            "QProgressBar { border: 0; background: #343a44; height: 5px; }"
-            "QProgressBar::chunk { background: #55a8f4; }"
+            "QComboBox { padding: 5px; }"
         )
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(18, 14, 18, 14)
-        layout.setSpacing(8)
-        self.heading = QLabel("System updater")
+        self.heading = QLabel("System updater" if self.system_state_store else "User updater")
         self.heading.setObjectName("heading")
         self.message = QLabel("Waiting for update status…")
         self.message.setObjectName("message")
         self.message.setWordWrap(True)
-        self.countdown = QLabel("")
-        self.progress = QProgressBar()
-        self.progress.setRange(0, 0)
-        self.progress.hide()
-        self.output = QLabel("")
-        self.output.setWordWrap(True)
-        self.output.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.system_panel = None
+        if self.system_state_store is not None:
+            system_path = system_request_file or Path(request_file).with_name("system-request.json")
+            self.system_panel = _TaskPanel("System update", self.policy, system_path, self)
+        self.user_panel = _TaskPanel("Your user tools", self.policy, request_file, self)
 
-        controls = QHBoxLayout()
-        self.defer_choice = QComboBox()
-        self.defer_button = QPushButton("Reschedule")
-        self.defer_button.setObjectName("defer_button")
-        self.update_now_button = QPushButton("Update now")
-        self.update_now_button.setObjectName("primary")
-        self.update_now_button.setDefault(True)
+        self.full_button = QPushButton("Full details")
+        self.full_button.clicked.connect(self.full_mode_requested.emit)
+        self.admin_button = QPushButton("Admin settings")
+        self.admin_button.setVisible(admin_enabled)
+        self.admin_button.clicked.connect(self.admin_requested.emit)
         self.close_button = QPushButton("Close")
         self.close_button.hide()
-        controls.addWidget(self.defer_choice, stretch=1)
-        controls.addWidget(self.defer_button)
-        controls.addWidget(self.update_now_button)
-        controls.addWidget(self.close_button)
+        buttons = QHBoxLayout()
+        buttons.addWidget(self.full_button)
+        buttons.addWidget(self.admin_button)
+        buttons.addStretch(1)
+        buttons.addWidget(self.close_button)
 
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(6)
         layout.addWidget(self.heading)
         layout.addWidget(self.message)
-        layout.addWidget(self.countdown)
-        layout.addWidget(self.progress)
-        layout.addWidget(self.output)
-        layout.addLayout(controls)
+        if self.system_panel is not None:
+            layout.addWidget(self.system_panel)
+        layout.addWidget(self.user_panel)
+        layout.addLayout(buttons)
 
-        self.defer_button.clicked.connect(self._submit_defer)
-        self.update_now_button.clicked.connect(self._submit_start_now)
         self.close_button.clicked.connect(self.close)
-
-    def refresh(self) -> None:
-        try:
-            state = self.state_store.load()
-        except StateError as exc:
-            self._set_phase("failed")
-            self.heading.setText("Updater status unavailable")
-            self.message.setText(str(exc))
-            self.show()
-            return
-
-        old_phase = self._phase
-        self._phase = state.phase
-        if state.run_id != self._current_run_id:
-            self._request_sent = False
-            self._current_run_id = state.run_id
-            self._dismissed_run_id = None
-        if state.phase != "awaiting_response":
-            self._request_sent = False
-        self.output.setText("\n".join(state.last_output[-4:]))
-        self.message.setText(state.message)
-        self.close_button.hide()
-        self.defer_button.hide()
-        self.defer_choice.hide()
-        self.update_now_button.hide()
-        self.progress.hide()
-        self.countdown.hide()
-
-        if state.phase == "awaiting_response":
-            self.heading.setText("Update scheduled")
-            self._show_response_controls(state)
-            self.show()
-        elif state.phase == "running":
-            self.heading.setText("Updates are running")
-            self.message.setText("Do not turn off or restart the computer until this finishes.")
-            self.progress.show()
-            if self._dismissed_run_id == state.run_id:
-                self.hide()
-            else:
-                self.show()
-        elif state.phase == "deferred":
-            self.heading.setText("Update rescheduled")
-            self.close_button.show()
-            self.show()
-            if old_phase != state.phase:
-                QTimer.singleShot(20_000, lambda: self._hide_if_phase("deferred"))
-        elif state.phase in {"succeeded", "failed"}:
-            self.heading.setText(
-                "Update complete" if state.phase == "succeeded" else "Update needs attention"
-            )
-            self.close_button.show()
-            self.show()
-            if old_phase != state.phase:
-                QTimer.singleShot(30_000, lambda: self._hide_if_phase(state.phase))
-        else:
-            self.heading.setText("System updater")
-            self.hide()
-
-        if old_phase != self._phase:
-            self.phase_changed.emit(self._phase)
-            self._position_window()
+        # Backwards-compatible button access for user-only clients and tests.
+        self.defer_choice = self.user_panel.defer_choice
+        self.defer_button = self.user_panel.defer_button
+        self.update_now_button = self.user_panel.update_now_button
 
     @property
     def phase(self) -> str:
         return self._phase
 
+    def set_full_mode(self, enabled: bool) -> None:
+        self._full_mode = enabled
+        if enabled:
+            self.hide()
+        else:
+            self.show_status()
+
+    def apply_policy(self, policy: Policy) -> None:
+        self.policy = policy
+        self.user_panel.policy = policy
+        if self.system_panel is not None:
+            self.system_panel.policy = policy
+        self.refresh()
+
     def show_status(self) -> None:
-        self._dismissed_run_id = None
+        self._full_mode = False
+        self._dismissed_runs.clear()
         self.refresh()
         if self._phase != "idle":
             self.show()
+            QTimer.singleShot(0, self._position_window)
 
-    def _show_response_controls(self, state: UpdateState) -> None:
-        self.update_now_button.show()
-        remaining = _remaining_seconds(state.response_deadline)
-        if remaining is None:
-            self.countdown.setText("The update will begin automatically after the response window.")
-        else:
-            minutes, seconds = divmod(remaining, 60)
-            self.countdown.setText(
-                f"Starting automatically in {minutes}:{seconds:02d} unless rescheduled."
-            )
-        self.countdown.show()
-        allowed = (
-            self.policy.interaction.allow_deferral
-            and state.deferrals_used < self.policy.interaction.max_deferrals_per_run
-            and bool(self.policy.interaction.deferral_options_hours)
-        )
-        if allowed:
-            self.defer_choice.clear()
-            for hours in self.policy.interaction.deferral_options_hours:
-                self.defer_choice.addItem(_duration_label(hours), hours)
-            self.defer_choice.show()
-            self.defer_button.show()
-        if self._request_sent:
-            self.update_now_button.setEnabled(False)
-            self.defer_button.setEnabled(False)
-            self.defer_choice.setEnabled(False)
-            self.message.setText("Your response was sent. The updater is applying it.")
-        else:
-            self.update_now_button.setEnabled(True)
-            self.defer_button.setEnabled(True)
-            self.defer_choice.setEnabled(True)
-
-    def _submit_defer(self) -> None:
-        state = self.state_store.load()
-        hours = self.defer_choice.currentData()
-        if state.phase != "awaiting_response" or state.run_id is None or hours is None:
-            return
-        self._save_user_request(UserRequest(state.run_id, "defer", int(hours)))
-
-    def _submit_start_now(self) -> None:
-        state = self.state_store.load()
-        if state.phase != "awaiting_response" or state.run_id is None:
-            return
-        self._save_user_request(UserRequest(state.run_id, "start_now"))
-
-    def _save_user_request(self, request: UserRequest) -> None:
+    def refresh(self) -> None:
         try:
-            save_request(self.request_file, request)
-            self._request_sent = True
-            self.refresh()
-        except OSError as exc:
-            self.message.setText(f"Could not send your response: {exc}")
+            user_state = self.state_store.load()
+            system_state = self.system_state_store.load() if self.system_state_store else None
+        except StateError as exc:
+            self.heading.setText("Updater status unavailable")
+            self.message.setText(str(exc))
+            self._phase = "failed"
+            if not self._full_mode:
+                self.show()
+            return
+
+        if not self.policy.updates.run_user_tools and user_state.phase != "running":
+            user_state = UpdateState(phase="disabled", message="Disabled by administrator policy.")
+        if (
+            not self.policy.updates.run_system
+            and system_state is not None
+            and system_state.phase != "running"
+        ):
+            system_state = UpdateState(
+                phase="disabled", message="Disabled by administrator policy."
+            )
+
+        self.user_panel.apply_state(user_state)
+        if self.system_panel is not None and system_state is not None:
+            self.system_panel.apply_state(system_state)
+
+        states = {"user-tools": user_state}
+        if system_state is not None:
+            states["system"] = system_state
+        dismissible = {"awaiting_response", "running", "deferred", "succeeded", "failed"}
+        live_run_keys = {
+            (task, state.run_id)
+            for task, state in states.items()
+            if state.run_id is not None and state.phase in dismissible
+        }
+        self._dismissed_runs.intersection_update(live_run_keys)
+
+        running = [(task, state) for task, state in states.items() if state.phase == "running"]
+        awaiting = any(state.phase == "awaiting_response" for state in states.values())
+        deferred = any(state.phase == "deferred" for state in states.values())
+        previous_phase = self._phase
+        if running:
+            self._phase = "running"
+            self.heading.setText("Updates are running")
+            self.message.setText(
+                "Do not turn off or restart the computer until all updates finish."
+            )
+        elif awaiting:
+            self._phase = "awaiting_response"
+            self.heading.setText("Update scheduled")
+            self.message.setText("Respond to each scheduled task below. No response means proceed.")
+        elif deferred:
+            self._phase = "deferred"
+            self.heading.setText("Update rescheduled")
+            self.message.setText("A permitted update was postponed until its displayed time.")
+        else:
+            errors = [state for state in states.values() if state.phase == "failed"]
+            completed = [state for state in states.values() if state.phase == "succeeded"]
+            self._phase = "failed" if errors else "succeeded" if completed else "idle"
+            self.heading.setText(
+                "Update needs attention"
+                if errors
+                else "Update complete"
+                if completed
+                else "System updater"
+            )
+            self.message.setText(
+                errors[0].message
+                if errors
+                else completed[0].message
+                if completed
+                else "Waiting for the next scheduled update."
+            )
+
+        self.close_button.setVisible(self._phase in {"deferred", "succeeded", "failed"})
+        if self._phase == "idle":
+            self.hide()
+        elif not self._full_mode:
+            dismissible_states = [
+                (task, state) for task, state in states.items() if state.phase in dismissible
+            ]
+            dismissed = bool(dismissible_states) and all(
+                (task, state.run_id) in self._dismissed_runs for task, state in dismissible_states
+            )
+            if dismissed:
+                self.hide()
+            else:
+                self.show()
+                if previous_phase != self._phase:
+                    QTimer.singleShot(0, self._position_window)
+
+        if previous_phase != self._phase:
+            self.phase_changed.emit(self._phase)
+            if self._phase in {"succeeded", "failed"}:
+                QTimer.singleShot(30_000, lambda phase=self._phase: self._hide_if_phase(phase))
 
     def _position_window(self) -> None:
         screen = QApplication.primaryScreen()
         if screen is None:
             return
         available = screen.availableGeometry()
-        self.move(available.right() - self.width() - 24, available.bottom() - self.height() - 24)
+        self.move(available.right() - self.width() - 20, available.bottom() - self.height() - 20)
 
     def _hide_if_phase(self, expected_phase: str) -> None:
-        if self._phase == expected_phase:
+        if self._phase == expected_phase and not self._full_mode:
             self.hide()
 
-    def _set_phase(self, phase: str) -> None:
-        self._phase = phase
-
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt override name
-        if self._phase == "awaiting_response":
-            event.ignore()
-        else:
-            if self._phase == "running":
-                self._dismissed_run_id = self._current_run_id
-            event.accept()
+        if self._phase in {"awaiting_response", "running", "deferred", "succeeded", "failed"}:
+            for task, state in (
+                ("system", self.system_state_store),
+                ("user-tools", self.state_store),
+            ):
+                if state is None:
+                    continue
+                try:
+                    update = state.load()
+                except StateError:
+                    continue
+                if update.phase in {
+                    "awaiting_response",
+                    "running",
+                    "deferred",
+                    "succeeded",
+                    "failed",
+                }:
+                    self._dismissed_runs.add((task, update.run_id))
+        event.accept()
 
 
 def _duration_label(hours: int) -> str:

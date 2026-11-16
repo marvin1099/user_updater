@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
+import stat
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,6 +16,7 @@ from .sessions import DesktopUser
 Runner = Callable[..., CommandResult]
 Which = Callable[..., str | None]
 Output = Callable[[str], None]
+_CUSTOM_TOOL_NAME = re.compile(r"^[A-Za-z0-9_.+-]{1,128}$")
 
 
 @dataclass(frozen=True)
@@ -37,6 +40,7 @@ class UserToolUpdater:
         tools: Sequence[str],
         on_output: Output,
         on_idle: Callable[[float], None] | None = None,
+        allow_custom_tools: bool = True,
     ) -> list[ToolResult]:
         results: list[ToolResult] = []
         env = _user_environment(user)
@@ -65,6 +69,56 @@ class UserToolUpdater:
             results.append(
                 self._run_tool(tool, [executable, *arguments], user, env, on_output, on_idle)
             )
+        if allow_custom_tools:
+            results.extend(self._run_custom_tools(user, env, on_output, on_idle))
+        return results
+
+    def _run_custom_tools(
+        self,
+        user: DesktopUser,
+        env: dict[str, str],
+        on_output: Output,
+        on_idle: Callable[[float], None] | None,
+    ) -> list[ToolResult]:
+        directory = user.home / ".config" / "user_updater" / "tools.d"
+        try:
+            metadata = directory.stat(follow_symlinks=False)
+        except FileNotFoundError:
+            return []
+        except OSError as exc:
+            return [_failed("custom-tools", 1, f"Could not inspect custom tools: {exc}")]
+        if not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != user.uid:
+            return [_failed("custom-tools", 1, "Custom tools directory must be user-owned.")]
+
+        results: list[ToolResult] = []
+        try:
+            candidates = sorted(directory.iterdir(), key=lambda path: path.name)
+        except OSError as exc:
+            return [_failed("custom-tools", 1, f"Could not read custom tools: {exc}")]
+
+        for script in candidates:
+            if not _CUSTOM_TOOL_NAME.fullmatch(script.name):
+                continue
+            try:
+                metadata = script.stat(follow_symlinks=False)
+            except OSError as exc:
+                results.append(_failed(f"custom:{script.name}", 1, str(exc)))
+                continue
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_uid != user.uid
+                or not metadata.st_mode & stat.S_IXUSR
+            ):
+                continue
+            result = self._run_tool(
+                f"custom:{script.name}",
+                [str(script)],
+                user,
+                env,
+                on_output,
+                on_idle,
+            )
+            results.append(result)
         return results
 
     def _update_pip(

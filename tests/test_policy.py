@@ -2,7 +2,13 @@ from pathlib import Path
 
 import pytest
 
-from user_updater.policy import PolicyError, check_deferral, load_policy
+from user_updater.policy import (
+    PolicyError,
+    check_deferral,
+    load_policy,
+    policy_to_mapping,
+    write_policy,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -13,10 +19,13 @@ def test_default_policy_matches_product_defaults() -> None:
     assert policy.schedule.days == ("thu", "sun")
     assert policy.schedule.time == "03:00"
     assert policy.schedule.response_minutes == 5
+    assert policy.schedule.user_tools_interval_hours == 24
+    assert policy.schedule.user_tools_response_minutes == 5
     assert policy.interaction.allow_deferral is True
     assert policy.interaction.deferral_options_hours == (1, 4, 24)
     assert policy.updates.run_system is True
     assert "flatpak" in policy.updates.user_tools
+    assert policy.updates.allow_custom_user_tools is True
 
 
 def test_admin_can_disable_rescheduling_without_disabling_response_window(
@@ -83,3 +92,16 @@ def test_boolean_is_not_accepted_as_an_integer_deferral() -> None:
     policy = load_policy(PROJECT_ROOT / "project.yaml")
 
     assert check_deferral(policy, hours=True, deferrals_used=0) is False
+
+
+def test_admin_policy_write_validates_and_round_trips_atomically(tmp_path: Path) -> None:
+    path = tmp_path / "etc" / "project.yaml"
+    original = load_policy(PROJECT_ROOT / "project.yaml")
+    mapping = policy_to_mapping(original)
+    mapping["schedule"]["user_tools_interval_hours"] = 12
+
+    saved = write_policy(path, mapping)
+
+    assert saved.schedule.user_tools_interval_hours == 12
+    assert load_policy(path) == saved
+    assert path.stat().st_mode & 0o777 == 0o644

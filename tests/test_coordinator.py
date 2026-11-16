@@ -111,6 +111,28 @@ def test_late_response_does_not_extend_the_response_window(tmp_path: Path) -> No
     assert action is TickAction.RUN
 
 
+def test_interval_schedule_starts_on_first_user_session_then_repeats_from_completion(
+    tmp_path: Path,
+) -> None:
+    store = StateStore(tmp_path / "user-state.json")
+    coordinator = UpdateCoordinator(
+        load_policy(),
+        store,
+        interval_hours=24,
+        response_minutes=3,
+    )
+
+    assert coordinator.tick(NOW) is TickAction.WAITING_FOR_RESPONSE
+    assert store.load().response_deadline == (NOW + timedelta(minutes=3)).isoformat()
+    assert coordinator.tick(NOW + timedelta(minutes=3)) is TickAction.RUN
+    coordinator.complete(0, NOW + timedelta(minutes=4))
+
+    due_at = NOW + timedelta(hours=24, minutes=4)
+    assert store.load().next_scheduled_at == due_at.isoformat()
+    assert coordinator.tick(due_at - timedelta(seconds=1)) is TickAction.NOT_DUE
+    assert coordinator.tick(due_at) is TickAction.WAITING_FOR_RESPONSE
+
+
 def test_admin_can_disable_deferral_without_skipping_the_prompt(tmp_path: Path) -> None:
     config = tmp_path / "project.yaml"
     config.write_text("version: 1\ninteraction:\n  allow_deferral: false\n", encoding="utf-8")

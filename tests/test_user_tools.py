@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from user_updater.runner import CommandResult
@@ -53,3 +54,35 @@ def test_pip_user_updates_parse_json_without_jq(tmp_path: Path) -> None:
     assert calls[0][-4:] == ["list", "--user", "--outdated", "--format=json"]
     assert calls[1][-4:] == ["install", "--user", "--upgrade", "sample-package"]
     assert result[0].returncode == 0
+
+
+def test_custom_executable_tools_run_last_as_the_user_and_can_be_disabled(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "alice"
+    custom_dir = home / ".config" / "user_updater" / "tools.d"
+    custom_dir.mkdir(parents=True)
+    script = custom_dir / "sync-notes"
+    script.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+    script.chmod(0o700)
+    calls: list[list[str]] = []
+
+    def runner(command: list[str], **_kwargs: object) -> CommandResult:
+        calls.append(command)
+        return CommandResult(0, 0.01, False, ())
+
+    updater = UserToolUpdater(runner=runner, which=lambda _name, path=None: None)
+    user = DesktopUser("alice", os.getuid(), os.getgid(), home, tmp_path / "runtime")
+
+    results = updater.update_user(user, (), lambda _line: None)
+    assert [result.tool for result in results] == ["custom:sync-notes"]
+    assert calls == [[str(script)]]
+
+    disabled = updater.update_user(
+        user,
+        (),
+        lambda _line: None,
+        allow_custom_tools=False,
+    )
+    assert disabled == []
+    assert calls == [[str(script)]]

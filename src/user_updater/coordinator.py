@@ -24,9 +24,18 @@ class TickAction(StrEnum):
 class UpdateCoordinator:
     """Advance one persisted update cycle without executing package commands."""
 
-    def __init__(self, policy: Policy, state_store: StateStore) -> None:
+    def __init__(
+        self,
+        policy: Policy,
+        state_store: StateStore,
+        *,
+        interval_hours: int | None = None,
+        response_minutes: int | None = None,
+    ) -> None:
         self.policy = policy
         self.state_store = state_store
+        self.interval_hours = interval_hours
+        self.response_minutes = response_minutes or policy.schedule.response_minutes
 
     def tick(
         self,
@@ -41,7 +50,7 @@ class UpdateCoordinator:
                 UpdateState(
                     phase="failed",
                     scheduled_for=state.scheduled_for,
-                    next_scheduled_at=next_scheduled_after(self.policy, now).isoformat(),
+                    next_scheduled_at=self._next_scheduled_at(now).isoformat(),
                     deferrals_used=state.deferrals_used,
                     finished_at=now.isoformat(),
                     message=(
@@ -63,9 +72,7 @@ class UpdateCoordinator:
                 run_id=state.run_id,
                 scheduled_for=state.scheduled_for,
                 next_scheduled_at=state.next_scheduled_at,
-                response_deadline=(
-                    now + timedelta(minutes=self.policy.schedule.response_minutes)
-                ).isoformat(),
+                response_deadline=(now + timedelta(minutes=self.response_minutes)).isoformat(),
                 deferrals_used=state.deferrals_used,
                 message="The postponed update is due. It will start after the response window.",
                 last_output=state.last_output,
@@ -76,7 +83,9 @@ class UpdateCoordinator:
         due_at = (
             _parse_datetime(state.next_scheduled_at, "next_scheduled_at")
             if state.next_scheduled_at
-            else next_scheduled_after(self.policy, now)
+            else (
+                now if self.interval_hours is not None else next_scheduled_after(self.policy, now)
+            )
         )
         if now < due_at:
             if state.next_scheduled_at is None:
@@ -88,9 +97,7 @@ class UpdateCoordinator:
             run_id=uuid4().hex,
             scheduled_for=due_at.isoformat(),
             next_scheduled_at=due_at.isoformat(),
-            response_deadline=(
-                now + timedelta(minutes=self.policy.schedule.response_minutes)
-            ).isoformat(),
+            response_deadline=(now + timedelta(minutes=self.response_minutes)).isoformat(),
             message=(
                 "An update is scheduled. Choose a permitted reschedule or "
                 "let it begin automatically."
@@ -119,7 +126,7 @@ class UpdateCoordinator:
                 phase="succeeded" if success else "failed",
                 run_id=state.run_id,
                 scheduled_for=state.scheduled_for,
-                next_scheduled_at=next_scheduled_after(self.policy, now).isoformat(),
+                next_scheduled_at=self._next_scheduled_at(now).isoformat(),
                 deferrals_used=state.deferrals_used,
                 started_at=state.started_at,
                 finished_at=now.isoformat(),
@@ -192,6 +199,11 @@ class UpdateCoordinator:
             )
         )
         return TickAction.RUN
+
+    def _next_scheduled_at(self, now: datetime) -> datetime:
+        if self.interval_hours is not None:
+            return now + timedelta(hours=self.interval_hours)
+        return next_scheduled_after(self.policy, now)
 
 
 def _parse_datetime(value: str | None, name: str) -> datetime:

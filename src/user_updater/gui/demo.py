@@ -14,6 +14,7 @@ from PySide6.QtWidgets import QApplication
 from ..policy import load_policy
 from ..requests import load_request, request_path
 from ..state import StateStore, UpdateState
+from .full_window import FullDetailsWindow
 from .window import UpdaterWindow
 
 
@@ -37,6 +38,15 @@ def run_demo() -> int:
         )
     )
     window = UpdaterWindow(load_policy(), store, request_file)
+    full_window = FullDetailsWindow(None, store, system_enabled=False)
+    window.full_mode_requested.connect(lambda: _show_full_details(window, full_window))
+    full_window.back_requested.connect(window.show_status)
+
+    def finish_full_details() -> None:
+        full_window.hide()
+        window.show_status()
+
+    full_window.all_updates_done.connect(finish_full_details)
     output: deque[str] = deque(maxlen=200)
     run_timer = QTimer()
     run_timer.setInterval(1000)
@@ -132,3 +142,10 @@ def run_demo() -> int:
     result = application.exec()
     temporary_directory.cleanup()
     return result
+
+
+def _show_full_details(window: UpdaterWindow, full_window: FullDetailsWindow) -> None:
+    window.set_full_mode(True)
+    full_window.refresh()
+    full_window.show()
+    full_window.position_bottom_right()

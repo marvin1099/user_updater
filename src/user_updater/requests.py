@@ -24,6 +24,15 @@ def request_path(home: Path) -> Path:
     return Path(home) / ".local" / "state" / "user_updater" / "request.json"
 
 
+def task_request_path(home: Path, task_id: str) -> Path:
+    """Return an isolated request file for one independently scheduled task."""
+    if not task_id or any(
+        character not in "abcdefghijklmnopqrstuvwxyz0123456789-_" for character in task_id
+    ):
+        raise ValueError("task_id contains unsupported characters")
+    return Path(home) / ".local" / "state" / "user_updater" / "requests" / f"{task_id}.json"
+
+
 def save_request(path: Path, request: UserRequest) -> None:
     """Atomically write a request owned by the desktop user."""
     payload = asdict(request)

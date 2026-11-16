@@ -1,7 +1,15 @@
 from datetime import datetime
 from pathlib import Path
 
-from user_updater.requests import UserRequest, load_request, request_path, save_request
+import pytest
+
+from user_updater.requests import (
+    UserRequest,
+    load_request,
+    request_path,
+    save_request,
+    task_request_path,
+)
 
 
 def test_request_is_scoped_to_a_run_and_user_state_directory(tmp_path: Path) -> None:
@@ -28,3 +36,17 @@ def test_invalid_or_untrusted_request_is_ignored(tmp_path: Path) -> None:
     )
 
     assert load_request(request_file, expected_uid=None, expected_run_id="r") is None
+
+
+def test_independent_tasks_get_separate_response_files(tmp_path: Path) -> None:
+    system_request = task_request_path(tmp_path, "system")
+    user_request = task_request_path(tmp_path, "user-tools")
+
+    assert system_request != user_request
+    assert system_request.name == "system.json"
+    assert user_request.name == "user-tools.json"
+
+
+def test_task_id_cannot_escape_the_user_request_directory(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="task_id"):
+        task_request_path(tmp_path, "../system")
