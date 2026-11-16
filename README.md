@@ -2,7 +2,7 @@
 
 User Updater is a Python and Qt application for scheduled Linux updates. A machine-wide installation schedules system updates separately from each logged-in user's personal tools. The two jobs have independent schedules and response prompts, and run concurrently when both are due. A user-only installation updates only the current user's tools.
 
-Before each scheduled update, the desktop client gives users a response window. A user may start immediately or request one of the reschedules allowed by administrator policy. If nobody responds, the update proceeds automatically. The compact frameless window can expand to a two-tab, read-only output view with elapsed time. Closing either view never cancels a worker.
+Before each scheduled update, the desktop client gives users a response window. A user may start immediately or request one of the reschedules allowed by administrator policy. If nobody responds, the update proceeds automatically. The compact frameless window can expand to read-only system/user output tabs and a recent-run history tab, with elapsed and next-run times. Failed tasks can be retried from the details view; system retries require administrator authorization. Closing either view never cancels a worker.
 
 ## Requirements
 
@@ -72,7 +72,7 @@ Set `interaction.allow_deferral: false` to remove rescheduling while retaining t
 
 Unknown policy keys and invalid values are rejected. User-mode execution always disables system updates even if a local policy attempts to enable them.
 
-The minimal desktop view has separate controls for system and personal-tool updates. **Full details** opens System updates and User tools tabs with read-only command output and elapsed time.
+The minimal desktop view has separate controls for system and personal-tool updates. **Full details** opens System updates, User tools, and Run history tabs, with read-only output, elapsed time, and the next scheduled run. The owner may retry a failed personal-tool run; a failed system run offers retry only after a polkit authorization prompt.
 
 ### Wayland window placement
 
@@ -85,9 +85,15 @@ The minimal desktop view has separate controls for system and personal-tool upda
 | Command | Purpose |
 | --- | --- |
 | `user-updater status --system` | Show machine-wide update state |
+| `user-updater retry --system` | Retry a failed machine-wide run after polkit authorization |
+| `user-updater history --system` | Show recent system and per-user run summaries |
+| `user-updater logs --system` | Print machine-wide logs (root only); add `--output FILE` to export |
 | `user-updater gui --system` | Open the machine-wide desktop client |
 | `user-updater tick --system` | Run one scheduler check; normally invoked by systemd |
 | `user-updater status --user` | Show this user's update state |
+| `user-updater retry --user` | Request an owner-authorized retry of failed personal-tool updates |
+| `user-updater history --user` | Show recent personal-tool run summaries |
+| `user-updater logs --user` | Print this user's logs; add `--output FILE` to export |
 | `user-updater gui --user` | Open this user's desktop client |
 | `user-updater demo` | Preview the Qt flow with simulated updates |
 | `user-updater doctor` | Check runtime dependencies |
@@ -96,9 +102,9 @@ The minimal desktop view has separate controls for system and personal-tool upda
 
 Uninstall the user integration with `user-updater uninstall --user`; add `--purge` to remove its local policy and state as well.
 
-Worker output is available through the system or user journal and a rotating log file (up to five 10 MiB backups). System logs are in `/var/log/user-updater/updater.log`; user-only logs are in `~/.local/state/user_updater/updater.log`. The application uses separate locks and state for system and per-user tasks, and cleans abandoned temporary builder accounts and sudoers entries before starting a later system update.
+Each task keeps the latest 20 metadata-only run summaries; output stays in the rotating log rather than being duplicated in history. Machine-wide logs at `/var/log/user-updater/updater.log` are root-only through the CLI, while user-only logs are at `~/.local/state/user_updater/updater.log`. Log files rotate through up to five 10 MiB backups. The application uses separate locks and state for system and per-user tasks, and cleans abandoned temporary builder accounts and sudoers entries before starting a later system update.
 
-If a worker is interrupted while its state says `running`, the next scheduler tick records the run as failed, preserves its run ID, start time, and recent output, and advances to the next normal scheduled occurrence. It does not immediately replay an update that may have partially changed the system. Invalid persisted state is rejected rather than interpreted as permission to run an update. See [reliability testing](docs/reliability-testing.md) for the VM checklist.
+If a worker is interrupted while its state says `running`, the next scheduler tick records the run as failed, preserves its run ID and start time, and advances to the next normal scheduled occurrence. It does not immediately replay an update that may have partially changed the system. System output stays in the root-only log; personal-tool output remains separately inspectable by its owner. Invalid persisted state is rejected rather than interpreted as permission to run an update. See [reliability testing](docs/reliability-testing.md) for the VM checklist.
 
 ## Tests and lint
 

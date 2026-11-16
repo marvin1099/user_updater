@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime
+from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QFontDatabase, QTextCursor
@@ -16,6 +18,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..history import HistoryError, RunHistoryStore, RunRecord, history_path_for_state
+from ..requests import UserRequest, save_request
 from ..state import StateError, StateStore, UpdateState
 from .placement import WindowPlacement
 
@@ -27,7 +31,11 @@ class _TaskTab(QWidget):
         super().__init__(parent)
         self.status = QLabel(f"{title}: waiting")
         self.elapsed = QLabel("Elapsed: —")
+        self.next_run = QLabel("Next scheduled: —")
         self.terminal = QPlainTextEdit()
+        self.retry_button = QPushButton("Retry failed update")
+        self.retry_button.setObjectName("retry")
+        self.retry_button.hide()
         self.terminal.setReadOnly(True)
         self.terminal.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         self.terminal.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
@@ -37,11 +45,28 @@ class _TaskTab(QWidget):
         heading.addWidget(self.status, stretch=1)
         heading.addWidget(self.elapsed)
         layout.addLayout(heading)
+        layout.addWidget(self.next_run)
         layout.addWidget(self.terminal, stretch=1)
+        controls = QHBoxLayout()
+        controls.addStretch(1)
+        controls.addWidget(self.retry_button)
+        layout.addLayout(controls)
 
-    def update_state(self, title: str, state: UpdateState) -> None:
+    def update_state(
+        self,
+        title: str,
+        state: UpdateState,
+        *,
+        retry_enabled: bool = False,
+        retry_pending: bool = False,
+    ) -> None:
         self.status.setText(f"{title}: {state.phase.replace('_', ' ').title()} — {state.message}")
+        if retry_pending:
+            self.status.setText(f"{title}: retry requested — waiting for the updater.")
         self.elapsed.setText(f"Elapsed: {_elapsed_text(state)}")
+        self.next_run.setText(f"Next scheduled: {_format_datetime(state.next_scheduled_at)}")
+        self.retry_button.setVisible(retry_enabled and state.phase == "failed")
+        self.retry_button.setEnabled(not retry_pending)
         text = "\n".join(state.last_output)
         if text != self.terminal.toPlainText():
             self.terminal.setPlainText(text)
@@ -53,6 +78,7 @@ class FullDetailsWindow(QWidget):
 
     back_requested = Signal()
     all_updates_done = Signal()
+    system_retry_requested = Signal()
 
     def __init__(
         self,
@@ -61,6 +87,10 @@ class FullDetailsWindow(QWidget):
         *,
         system_enabled: bool = True,
         user_tools_enabled: bool = True,
+        user_request_file: Path | None = None,
+        system_logs_visible: bool = False,
+        system_history_store: RunHistoryStore | None = None,
+        user_history_store: RunHistoryStore | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -68,6 +98,18 @@ class FullDetailsWindow(QWidget):
         self.user_state_store = user_state_store
         self.system_enabled = system_enabled
         self.user_tools_enabled = user_tools_enabled
+        self.user_request_file = Path(user_request_file) if user_request_file else None
+        self.system_logs_visible = system_logs_visible
+        self.system_history_store = system_history_store or (
+            RunHistoryStore(history_path_for_state(system_state_store.path), file_mode=0o644)
+            if system_state_store is not None
+            else None
+        )
+        self.user_history_store = user_history_store or RunHistoryStore(
+            history_path_for_state(user_state_store.path), file_mode=user_state_store.file_mode
+        )
+        self._system_retry_requested_for: str | None = None
+        self._user_retry_requested_for: str | None = None
         self._seen_active = False
         self._completion_emitted = False
         self.setWindowTitle("User Updater Details")
@@ -92,6 +134,13 @@ class FullDetailsWindow(QWidget):
         self.user_tab = _TaskTab("User tools")
         self.tabs.addTab(self.system_tab, "System updates")
         self.tabs.addTab(self.user_tab, "User tools")
+        self.history_view = QPlainTextEdit()
+        self.history_view.setObjectName("runHistory")
+        self.history_view.setReadOnly(True)
+        self.history_view.setPlaceholderText("No completed update runs recorded.")
+        self.tabs.addTab(self.history_view, "Run history")
+        self.system_tab.retry_button.clicked.connect(self.system_retry_requested.emit)
+        self.user_tab.retry_button.clicked.connect(self._submit_user_retry)
         self.back_button = QPushButton("Back to minimal view")
         self.back_button.clicked.connect(self._return_to_minimal)
 
@@ -110,10 +159,41 @@ class FullDetailsWindow(QWidget):
         self.refresh()
 
     def refresh(self) -> None:
-        system_state = self._read_state(self.system_state_store, self.system_enabled)
+        system_state = self._read_state(
+            self.system_state_store,
+            self.system_enabled,
+            include_output=self.system_logs_visible,
+        )
         user_state = self._read_state(self.user_state_store, self.user_tools_enabled)
-        self.system_tab.update_state("System updates", system_state)
-        self.user_tab.update_state("Your user tools", user_state)
+        if user_state.run_id != self._user_retry_requested_for:
+            self._user_retry_requested_for = None
+        if (
+            self._system_retry_requested_for is not None
+            and (
+                system_state.run_id != self._system_retry_requested_for
+                or system_state.phase != "failed"
+            )
+        ):
+            self._system_retry_requested_for = None
+        self.system_tab.update_state(
+            "System updates",
+            system_state,
+            retry_enabled=self.system_enabled,
+            retry_pending=(
+                system_state.run_id is not None
+                and system_state.run_id == self._system_retry_requested_for
+            ),
+        )
+        self.user_tab.update_state(
+            "Your user tools",
+            user_state,
+            retry_enabled=self.user_tools_enabled and self.user_request_file is not None,
+            retry_pending=(
+                user_state.run_id is not None
+                and user_state.run_id == self._user_retry_requested_for
+            ),
+        )
+        self._refresh_history()
         states = [system_state, user_state]
         active = any(state.phase in _ACTIVE_PHASES for state in states)
         if active and self._completion_emitted:
@@ -128,7 +208,12 @@ class FullDetailsWindow(QWidget):
         self._placement.position_bottom_right()
 
     @staticmethod
-    def _read_state(store: StateStore | None, enabled: bool) -> UpdateState:
+    def _read_state(
+        store: StateStore | None,
+        enabled: bool,
+        *,
+        include_output: bool = True,
+    ) -> UpdateState:
         if store is None and enabled:
             return UpdateState(phase="idle", message="No machine-wide system task in this install.")
         if store is None or not enabled:
@@ -136,14 +221,45 @@ class FullDetailsWindow(QWidget):
                 try:
                     state = store.load()
                     if state.phase == "running":
-                        return state
+                        return state if include_output else replace(state, last_output=())
                 except StateError:
                     pass
             return UpdateState(phase="disabled", message="Disabled by administrator policy.")
         try:
-            return store.load()
+            state = store.load()
+            return state if include_output else replace(state, last_output=())
         except StateError as exc:
             return UpdateState(phase="failed", message=f"Could not read update state: {exc}")
+
+    def _submit_user_retry(self) -> None:
+        try:
+            state = self.user_state_store.load()
+            if state.phase != "failed" or state.run_id is None or self.user_request_file is None:
+                return
+            save_request(self.user_request_file, UserRequest(state.run_id, "retry"))
+            self._user_retry_requested_for = state.run_id
+            self.refresh()
+        except (OSError, StateError, ValueError) as exc:
+            self.user_tab.status.setText(f"Your user tools: could not request retry: {exc}")
+
+    def _refresh_history(self) -> None:
+        records: list[RunRecord] = []
+        errors: list[str] = []
+        for store in (self.system_history_store, self.user_history_store):
+            if store is None:
+                continue
+            try:
+                records.extend(store.load())
+            except HistoryError as exc:
+                errors.append(str(exc))
+        records.sort(key=_history_timestamp, reverse=True)
+        lines = [
+            f"{_format_datetime(record.finished_at)}  {record.task}  "
+            f"{record.phase}: {record.message}"
+            for record in records
+        ]
+        lines.extend(f"History unavailable: {error}" for error in errors)
+        self.history_view.setPlainText("\n".join(lines))
 
     def _return_to_minimal(self) -> None:
         self.hide()
@@ -170,3 +286,21 @@ def _elapsed_text(state: UpdateState) -> str:
     hours, remainder = divmod(seconds, 3600)
     minutes, seconds = divmod(remainder, 60)
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
+def _format_datetime(value: str | None) -> str:
+    if value is None:
+        return "—"
+    try:
+        return datetime.fromisoformat(value).astimezone().strftime("%Y-%m-%d %H:%M %Z")
+    except (OverflowError, OSError, ValueError):
+        return "unknown"
+
+
+def _history_timestamp(record: RunRecord) -> float:
+    if record.finished_at is None:
+        return 0.0
+    try:
+        return datetime.fromisoformat(record.finished_at).timestamp()
+    except (OverflowError, OSError, ValueError):
+        return 0.0

@@ -13,7 +13,7 @@ QT_QPA_PLATFORM=offscreen uv run pytest -q
 uv build
 ```
 
-The service tests model a process restart by persisting a `running` state, constructing a fresh service, and ticking it again. Recovery must mark the old run failed, preserve its identity and recent output, avoid invoking the workflow again, and wait until the next normal due time. This is deliberately not an automatic immediate retry: a package update may have applied only part of its changes.
+The service tests model a process restart by persisting a `running` state, constructing a fresh service, and ticking it again. Recovery must mark the old run failed, preserve its identity, avoid invoking the workflow again, and wait until the next normal due time. Personal-tool state may retain its recent output; system output stays in the root-only log and is cleared from shared state. This is deliberately not an automatic immediate retry: a package update may have applied only part of its changes.
 
 ## KDE Wayland GUI smoke test
 

@@ -13,7 +13,7 @@ from ..paths import system_paths, user_paths
 from ..policy import load_policy
 from ..requests import task_request_path
 from ..state import StateStore
-from .admin import open_admin_settings
+from .admin import open_admin_settings, start_system_retry
 from .full_window import FullDetailsWindow
 from .window import UpdaterWindow
 
@@ -43,6 +43,8 @@ def run_gui(system_mode: bool = False) -> int:
         user_state,
         system_enabled=system_mode and policy.updates.run_system,
         user_tools_enabled=policy.updates.run_user_tools,
+        user_request_file=user_request,
+        system_logs_visible=os.geteuid() == 0,
     )
 
     def show_full_details() -> None:
@@ -68,6 +70,7 @@ def run_gui(system_mode: bool = False) -> int:
 
     window.full_mode_requested.connect(show_full_details)
     window.admin_requested.connect(lambda: open_admin_settings(window, paths.policy, policy_saved))
+    full_window.system_retry_requested.connect(lambda: start_system_retry(full_window))
     full_window.back_requested.connect(return_to_minimal)
     full_window.all_updates_done.connect(finish_full_details)
 

@@ -11,14 +11,17 @@ import shutil
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 from pathlib import Path
 
 from .accounts import BuilderAccountManager
 from .coordinator import TickAction
+from .history import HistoryError, RunHistoryStore, RunRecord, history_path_for_state
 from .installer import InstallPaths, SystemInstaller, UserInstaller, UserInstallPaths
 from .logging_config import configure_logging
 from .paths import system_paths, user_paths
 from .policy import PolicyError, load_policy, write_policy
+from .requests import UserRequest, save_request, task_request_path
 from .service import RequestHome, UpdateService, local_request_homes
 from .sessions import DesktopUser, detect_graphical_users
 from .state import StateError, StateStore
@@ -49,6 +52,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     status = commands.add_parser("status", help="Show the most recent update state")
     _add_scope(status)
+
+    retry = commands.add_parser("retry", help="Manually retry a failed update")
+    _add_scope(retry)
+
+    history = commands.add_parser("history", help="Show recent update run summaries")
+    _add_scope(history)
+    history.add_argument("--limit", type=int, default=10, help="Number of recent runs (1-20)")
+
+    logs = commands.add_parser("logs", help="Inspect or export updater logs")
+    _add_scope(logs)
+    logs.add_argument("--lines", type=int, default=200, help="Number of lines to print (1-10000)")
+    logs.add_argument("--output", type=Path, help="Export the current log to a new file")
 
     commands.add_parser("demo", help="Preview the Qt windows with a simulated update")
     commands.add_parser("doctor", help="Check runtime dependencies without changing the system")
@@ -83,6 +98,12 @@ def main(argv: list[str] | None = None) -> int:
             return run_gui(system_mode)
         if args.command == "status":
             return _status(system_mode)
+        if args.command == "retry":
+            return _retry(system_mode)
+        if args.command == "history":
+            return _history(system_mode, args.limit)
+        if args.command == "logs":
+            return _logs(system_mode, args.lines, args.output)
         if args.command == "demo":
             from .gui.demo import run_demo
 
@@ -191,6 +212,7 @@ def _tick(system_mode: bool) -> int:
                     on_log=logger.info,
                     task_id="system",
                     lock_file=paths.state.parent / "locks" / "system.lock",
+                    persist_output=False,
                 ),
                 system_store,
             )
@@ -264,6 +286,198 @@ def _tick(system_mode: bool) -> int:
     return int(failed)
 
 
+def _retry(system_mode: bool) -> int:
+    if not system_mode:
+        return _retry_user()
+
+    executable = _executable_path()
+    if os.geteuid() != 0:
+        _require_trusted_system_install(executable)
+        pkexec = shutil.which("pkexec")
+        if pkexec is None:
+            raise RuntimeError("pkexec is required to authorize a machine-wide retry")
+        result = subprocess.run(
+            [pkexec, str(executable), "retry", "--system"],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.stdout:
+            print(result.stdout, end="" if result.stdout.endswith("\n") else "\n")
+        if result.stderr:
+            print(result.stderr, file=sys.stderr, end="" if result.stderr.endswith("\n") else "\n")
+        return result.returncode
+
+    _require_trusted_system_install(executable)
+    paths = system_paths()
+    logger = configure_logging(paths.log_file)
+    policy = load_policy(paths.policy if paths.policy.exists() else None)
+    if not policy.updates.run_system:
+        raise ValueError("machine-wide updates are disabled by administrator policy")
+    state_store = StateStore(paths.state, file_mode=0o644)
+    system_policy = dataclasses.replace(
+        policy,
+        updates=dataclasses.replace(
+            policy.updates,
+            run_user_tools=False,
+            allow_custom_user_tools=False,
+        ),
+    )
+    builder = BuilderAccountManager(paths.builder_home, paths.sudoers, system_policy)
+    workflow = UpdateWorkflow(
+        system_policy,
+        builder_manager=builder,
+        session_detector=lambda: [],
+    )
+    service = UpdateService(
+        system_policy,
+        state_store,
+        workflow,
+        request_homes=local_request_homes,
+        on_log=logger.info,
+        task_id="system",
+        lock_file=paths.state.parent / "locks" / "system.lock",
+        persist_output=False,
+    )
+    action = service.retry_failed()
+    if action is TickAction.WORKER_ALREADY_ACTIVE:
+        raise RuntimeError("an update worker is already active")
+    final_state = state_store.load()
+    print(final_state.message)
+    return int(final_state.phase == "failed")
+
+
+def _retry_user() -> int:
+    managed_paths = system_paths()
+    if managed_paths.policy.is_file():
+        if os.getuid() == 0:
+            raise ValueError("personal-tool retries must be requested by the owning user")
+        policy = load_policy(managed_paths.policy)
+        if not policy.updates.run_user_tools:
+            raise ValueError("personal tool updates are disabled by administrator policy")
+        state_path = managed_paths.user_state_dir / f"{os.getuid()}.json"
+        state = StateStore(state_path, file_mode=0o644).load()
+        if state.phase != "failed" or state.run_id is None:
+            raise ValueError("only a failed personal-tool update can be retried")
+        save_request(
+            task_request_path(Path.home(), "user-tools"),
+            UserRequest(state.run_id, "retry"),
+        )
+        print("Personal-tool retry request submitted to the system updater.")
+        return 0
+
+    paths = user_paths()
+    policy = load_policy(paths.policy if paths.policy.exists() else None)
+    if not policy.updates.run_user_tools:
+        raise ValueError("personal tool updates are disabled by policy")
+    state = StateStore(paths.state, file_mode=0o600).load()
+    if state.phase != "failed" or state.run_id is None:
+        raise ValueError("only a failed personal-tool update can be retried")
+    save_request(
+        task_request_path(Path.home(), "user-tools"),
+        UserRequest(state.run_id, "retry"),
+    )
+    # The request is owner-written; the normal worker consumes it under its lock.
+    return _tick(system_mode=False)
+
+
+def _history(system_mode: bool, limit: int) -> int:
+    if not 1 <= limit <= 20:
+        raise ValueError("history limit must be between 1 and 20")
+    paths = system_paths() if system_mode else user_paths()
+    sources: list[tuple[str, Path, int]] = []
+    if system_mode:
+        sources.append(("System", paths.state, 0o644))
+        for state_path in sorted(paths.user_state_dir.glob("*.json")):
+            if not state_path.stem.isdecimal():
+                continue
+            try:
+                username = pwd.getpwuid(int(state_path.stem)).pw_name
+            except (ValueError, KeyError):
+                username = f"UID {state_path.stem}"
+            sources.append((f"{username} user tools", state_path, 0o644))
+    elif (managed := system_paths()).policy.is_file():
+        sources.append(
+            (
+                "Personal tools",
+                managed.user_state_dir / f"{os.getuid()}.json",
+                0o644,
+            )
+        )
+    else:
+        sources.append(("Personal tools", paths.state, 0o600))
+
+    entries: list[tuple[str, RunRecord]] = []
+    had_error = False
+    for label, state_path, file_mode in sources:
+        try:
+            records = RunHistoryStore(
+                history_path_for_state(state_path), file_mode=file_mode
+            ).load()
+        except HistoryError as exc:
+            print(f"{label} history: {exc}", file=sys.stderr)
+            had_error = True
+            continue
+        entries.extend((label, record) for record in records)
+
+    entries.sort(key=lambda item: _history_timestamp(item[1]), reverse=True)
+    if not entries:
+        print("No completed update runs recorded.")
+    for label, record in entries[:limit]:
+        print(
+            f"{_format_history_time(record.finished_at)}\t{label}/{record.task}\t"
+            f"{record.phase}\t{record.message}"
+        )
+    return int(had_error)
+
+
+def _logs(system_mode: bool, lines: int, output: Path | None) -> int:
+    if not 1 <= lines <= 10_000:
+        raise ValueError("log line count must be between 1 and 10000")
+    paths = system_paths() if system_mode else user_paths()
+    if system_mode:
+        _require_root("machine-wide log access")
+    content = paths.log_file.read_bytes()
+    if output is not None:
+        destination = Path(output)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        descriptor = os.open(destination, flags, 0o600)
+        try:
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+        except OSError:
+            destination.unlink(missing_ok=True)
+            raise
+        print(f"Exported current updater log to {destination}")
+        return 0
+    text = content.decode("utf-8", errors="replace").splitlines()
+    print("\n".join(text[-lines:]))
+    return 0
+
+
+def _history_timestamp(record: RunRecord) -> float:
+    if record.finished_at is None:
+        return 0.0
+    try:
+        return datetime.fromisoformat(record.finished_at).timestamp()
+    except (OverflowError, OSError, ValueError):
+        return 0.0
+
+
+def _format_history_time(value: str | None) -> str:
+    if value is None:
+        return "time unknown"
+    try:
+        return datetime.fromisoformat(value).astimezone().strftime("%Y-%m-%d %H:%M %Z")
+    except (OverflowError, OSError, ValueError):
+        return "time unknown"
+
+
 def _status(system_mode: bool) -> int:
     paths = system_paths() if system_mode else user_paths()
     try:
@@ -274,7 +488,7 @@ def _status(system_mode: bool) -> int:
     print(f"Status: {state.phase}\n{state.message}")
     if state.next_scheduled_at:
         print(f"Next scheduled time: {state.next_scheduled_at}")
-    if state.last_output:
+    if state.last_output and (not system_mode or os.geteuid() == 0):
         print("\n".join(state.last_output[-10:]))
     if system_mode:
         for user_state_path in sorted(paths.user_state_dir.glob("*.json")):

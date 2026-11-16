@@ -142,6 +142,23 @@ class UpdateCoordinator:
             )
         )
 
+    def retry_failed(self, now: datetime) -> TickAction:
+        """Start a fresh run from a failed state after an explicit retry request."""
+        state = self.state_store.load()
+        if state.phase != "failed":
+            raise ValueError("only a failed update can be retried")
+        self.state_store.save(
+            UpdateState(
+                phase="running",
+                run_id=uuid4().hex,
+                scheduled_for=now.isoformat(),
+                next_scheduled_at=state.next_scheduled_at,
+                started_at=now.isoformat(),
+                message="A manually requested retry is running.",
+            )
+        )
+        return TickAction.RUN
+
     def _handle_response_window(
         self,
         state: UpdateState,

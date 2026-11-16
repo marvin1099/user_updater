@@ -10,7 +10,7 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 
-from PySide6.QtCore import QTime
+from PySide6.QtCore import QProcess, QTime, QTimer
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -240,6 +240,49 @@ def open_admin_settings(
         on_saved(load_policy(policy_file))
     except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
         QMessageBox.warning(parent, "Administrator settings", str(exc))
+
+
+def start_system_retry(parent: QWidget) -> None:
+    """Start a detached, polkit-authorized retry of a failed system task."""
+    try:
+        executable = _trusted_system_executable()
+        pkexec = shutil.which("pkexec")
+        if pkexec is None:
+            raise RuntimeError("pkexec is required to retry machine-wide updates")
+    except (OSError, RuntimeError, ValueError) as exc:
+        QMessageBox.warning(parent, "System update retry", str(exc))
+        return
+
+    try:
+        state = parent.system_state_store.load()
+    except (AttributeError, OSError, ValueError) as exc:
+        QMessageBox.warning(parent, "System update retry", str(exc))
+        return
+
+    started, pid = QProcess.startDetached(pkexec, [executable, "retry", "--system"])
+    if not started:
+        QMessageBox.warning(parent, "System update retry", "Could not start pkexec.")
+        return
+    pending_run_id = state.run_id
+    parent._system_retry_requested_for = pending_run_id
+    parent.refresh()
+    monitor = QTimer(parent)
+    monitor.setInterval(750)
+
+    def check_process() -> None:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            monitor.stop()
+            monitor.deleteLater()
+            if getattr(parent, "_system_retry_requested_for", None) == pending_run_id:
+                parent._system_retry_requested_for = None
+                parent.refresh()
+        except PermissionError:
+            pass
+
+    monitor.timeout.connect(check_process)
+    monitor.start()
 
 
 def _spin(value: int, minimum: int, maximum: int) -> QSpinBox:

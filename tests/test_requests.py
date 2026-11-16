@@ -47,6 +47,18 @@ def test_independent_tasks_get_separate_response_files(tmp_path: Path) -> None:
     assert user_request.name == "user-tools.json"
 
 
+def test_retry_request_is_a_payload_without_deferral_hours(tmp_path: Path) -> None:
+    request_file = task_request_path(tmp_path, "user-tools")
+    request = UserRequest("run-failed", "retry")
+    save_request(request_file, request)
+
+    loaded = load_request(request_file, expected_uid=None, expected_run_id="run-failed")
+
+    assert loaded is not None
+    assert loaded.action == "retry"
+    assert loaded.hours is None
+
+
 def test_task_id_cannot_escape_the_user_request_directory(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="task_id"):
         task_request_path(tmp_path, "../system")

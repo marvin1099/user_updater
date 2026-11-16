@@ -115,6 +115,8 @@ def _valid_payload(raw: Any) -> bool:
         return False
     if action == "start_now":
         return hours is None
+    if action == "retry":
+        return hours is None
     if action == "defer":
         return isinstance(hours, int) and not isinstance(hours, bool) and 1 <= hours <= 168
     return False

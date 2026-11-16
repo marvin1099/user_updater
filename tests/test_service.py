@@ -4,6 +4,9 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import pytest
+
+from user_updater.history import RunHistoryStore
 from user_updater.policy import load_policy
 from user_updater.requests import UserRequest, request_path, save_request, task_request_path
 from user_updater.service import RequestHome, UpdateService
@@ -116,11 +119,205 @@ def test_service_recovers_interrupted_run_and_does_not_replay_it(tmp_path: Path)
     assert state_store.load().run_id == "crashed-run"
     assert any("interrupted while running" in message for message in messages)
     assert workflow.calls == 0
+    recovered_history = RunHistoryStore(tmp_path / "state.history.json").load()
+    assert len(recovered_history) == 1
+    assert recovered_history[0].phase == "failed"
+    assert recovered_history[0].run_id == "crashed-run"
 
     next_action = service.tick(NOW + timedelta(minutes=1))
 
     assert next_action.value == "not_due"
     assert workflow.calls == 0
+
+
+def test_manual_retry_starts_a_new_run_for_a_failed_task(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "state.json")
+    store.save(
+        UpdateState(
+            phase="failed",
+            run_id="failed-run",
+            scheduled_for=(NOW - timedelta(days=1)).isoformat(),
+            next_scheduled_at=(NOW + timedelta(days=1)).isoformat(),
+            started_at=(NOW - timedelta(days=1)).isoformat(),
+            finished_at=(NOW - timedelta(days=1) + timedelta(minutes=2)).isoformat(),
+            returncode=1,
+            message="Package install failed.",
+            last_output=("old failure output",),
+        )
+    )
+    workflow = FakeWorkflow()
+    service = UpdateService(
+        load_policy(),
+        store,
+        workflow,
+        clock=lambda: NOW,
+        interval_hours=24,
+        lock_file=tmp_path / "locks" / "retry.lock",
+    )
+
+    action = service.retry_failed(NOW)
+
+    retried = store.load()
+    assert action.value == "run"
+    assert workflow.calls == 1
+    assert retried.phase == "succeeded"
+    assert retried.run_id != "failed-run"
+    assert retried.started_at == NOW.isoformat()
+    assert retried.next_scheduled_at == (NOW + timedelta(hours=24)).isoformat()
+    assert retried.last_output == ("fake topgrade completed",)
+
+
+def test_manual_retry_is_refused_unless_the_latest_state_failed(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "state.json")
+    store.save(UpdateState(phase="running", run_id="live-run"))
+    workflow = FakeWorkflow()
+    service = UpdateService(load_policy(), store, workflow)
+
+    with pytest.raises(ValueError, match="failed update"):
+        service.retry_failed(NOW)
+
+    assert store.load().run_id == "live-run"
+    assert workflow.calls == 0
+
+
+def test_system_retry_keeps_output_in_root_log_not_shared_state(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "state.json", file_mode=0o644)
+    store.save(UpdateState(phase="failed", run_id="old-system-run", returncode=1))
+    messages: list[str] = []
+    service = UpdateService(
+        load_policy(),
+        store,
+        FakeWorkflow(),
+        on_log=messages.append,
+        task_id="system",
+        persist_output=False,
+    )
+
+    service.retry_failed(NOW)
+
+    assert store.load().phase == "succeeded"
+    assert store.load().last_output == ()
+    assert "fake topgrade completed" in messages
+    assert RunHistoryStore(tmp_path / "state.history.json").load()[0].phase == "succeeded"
+
+
+def test_system_tick_clears_legacy_output_from_shared_state(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "state.json", file_mode=0o644)
+    store.save(
+        UpdateState(
+            phase="failed",
+            run_id="legacy-system-run",
+            next_scheduled_at=(NOW + timedelta(days=1)).isoformat(),
+            last_output=("legacy private system output",),
+        )
+    )
+    service = UpdateService(
+        load_policy(),
+        store,
+        FakeWorkflow(),
+        task_id="system",
+        persist_output=False,
+    )
+
+    action = service.tick(NOW)
+
+    assert action.value == "not_due"
+    assert store.load().last_output == ()
+
+
+def test_only_the_owning_user_can_request_a_retry_of_personal_tools(tmp_path: Path) -> None:
+    home = tmp_path / "alice"
+    home.mkdir()
+    request_file = task_request_path(home, "user-tools")
+    store = StateStore(tmp_path / "state.json")
+    store.save(
+        UpdateState(
+            phase="failed",
+            run_id="failed-user-run",
+            next_scheduled_at=(NOW + timedelta(days=1)).isoformat(),
+            returncode=1,
+        )
+    )
+    save_request(
+        request_file,
+        UserRequest("failed-user-run", "retry", submitted_at=NOW.isoformat()),
+    )
+    workflow = FakeWorkflow()
+    service = UpdateService(
+        load_policy(),
+        store,
+        workflow,
+        request_homes=lambda: [RequestHome(home, os.getuid())],
+        task_id="user-tools",
+        interval_hours=24,
+        lock_file=tmp_path / "locks" / "user-tools.lock",
+    )
+
+    action = service.tick(NOW)
+
+    assert action.value == "run"
+    assert store.load().phase == "succeeded"
+    assert workflow.calls == 1
+    assert not request_file.exists()
+
+
+def test_user_retry_request_cannot_start_a_system_update(tmp_path: Path) -> None:
+    home = tmp_path / "alice"
+    home.mkdir()
+    request_file = task_request_path(home, "system")
+    store = StateStore(tmp_path / "state.json")
+    store.save(
+        UpdateState(
+            phase="failed",
+            run_id="failed-system-run",
+            next_scheduled_at=(NOW + timedelta(days=1)).isoformat(),
+            returncode=1,
+        )
+    )
+    save_request(
+        request_file,
+        UserRequest("failed-system-run", "retry", submitted_at=NOW.isoformat()),
+    )
+    workflow = FakeWorkflow()
+    service = UpdateService(
+        load_policy(),
+        store,
+        workflow,
+        request_homes=lambda: [RequestHome(home, os.getuid())],
+        task_id="system",
+        lock_file=tmp_path / "locks" / "system.lock",
+    )
+
+    action = service.tick(NOW)
+
+    assert action.value == "not_due"
+    assert workflow.calls == 0
+    assert store.load().phase == "failed"
+
+
+def test_service_records_a_run_summary_after_completion(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "state.json", file_mode=0o600)
+    store.save(UpdateState(next_scheduled_at=NOW.isoformat()))
+    service = UpdateService(
+        load_policy(),
+        store,
+        FakeWorkflow(),
+        request_homes=lambda: [],
+        clock=lambda: NOW,
+        task_id="user-tools",
+        interval_hours=24,
+        response_minutes=1,
+        lock_file=tmp_path / "locks" / "history.lock",
+    )
+
+    service.tick(NOW)
+    service.tick(NOW + timedelta(minutes=1))
+
+    records = RunHistoryStore(tmp_path / "state.history.json").load()
+    assert len(records) == 1
+    assert records[0].task == "user-tools"
+    assert records[0].phase == "succeeded"
+    assert records[0].message == "Updates completed."
 
 
 def test_system_task_reads_only_its_own_response_file(tmp_path: Path) -> None:

@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QApplication
 from user_updater.gui.admin import AdminSettingsDialog
 from user_updater.gui.full_window import FullDetailsWindow
 from user_updater.gui.window import UpdaterWindow
+from user_updater.history import RunHistoryStore, history_path_for_state
 from user_updater.policy import load_policy
 from user_updater.requests import task_request_path
 from user_updater.state import StateStore, UpdateState
@@ -176,10 +177,10 @@ def test_full_details_has_read_only_task_tabs_and_returns_after_completion(tmp_p
     window.show()
     app.processEvents()
 
-    assert window.tabs.count() == 2
+    assert window.tabs.count() == 3
     assert window.system_tab.terminal.isReadOnly()
     assert window.user_tab.terminal.isReadOnly()
-    assert "system output" in window.system_tab.terminal.toPlainText()
+    assert "system output" not in window.system_tab.terminal.toPlainText()
     assert "user output" in window.user_tab.terminal.toPlainText()
 
     system_store.save(UpdateState(phase="succeeded", message="System complete."))
@@ -187,6 +188,57 @@ def test_full_details_has_read_only_task_tabs_and_returns_after_completion(tmp_p
     window.refresh()
     app.processEvents()
     assert window._completion_emitted
+    window.deleteLater()
+
+
+def test_full_details_shows_next_run_history_and_owner_retry_control(tmp_path: Path) -> None:
+    _application()
+    user_store = StateStore(tmp_path / "user.json")
+    next_run = (datetime.now().astimezone() + timedelta(hours=12)).isoformat()
+    user_store.save(
+        UpdateState(
+            phase="failed",
+            run_id="failed-user-run",
+            next_scheduled_at=next_run,
+            finished_at=datetime.now().astimezone().isoformat(),
+            message="User update failed.",
+        )
+    )
+    RunHistoryStore(history_path_for_state(user_store.path)).append(
+        "user-tools", user_store.load()
+    )
+    request_path = tmp_path / "requests" / "user-tools.json"
+    window = FullDetailsWindow(
+        None,
+        user_store,
+        system_enabled=False,
+        user_request_file=request_path,
+    )
+
+    assert "Next scheduled:" in window.user_tab.next_run.text()
+    assert not window.user_tab.retry_button.isHidden()
+    assert "User update failed." in window.history_view.toPlainText()
+
+    window.user_tab.retry_button.click()
+
+    assert '"run_id":"failed-user-run"' in request_path.read_text(encoding="utf-8")
+    assert '"action":"retry"' in request_path.read_text(encoding="utf-8")
+    assert not window.user_tab.retry_button.isEnabled()
+    window.deleteLater()
+
+
+def test_system_retry_button_requests_an_admin_authorized_action(tmp_path: Path) -> None:
+    _application()
+    system_store = StateStore(tmp_path / "system.json")
+    user_store = StateStore(tmp_path / "user.json")
+    system_store.save(UpdateState(phase="failed", run_id="failed-system-run"))
+    window = FullDetailsWindow(system_store, user_store, user_tools_enabled=False)
+    requested: list[bool] = []
+    window.system_retry_requested.connect(lambda: requested.append(True))
+
+    window.system_tab.retry_button.click()
+
+    assert requested == [True]
     window.deleteLater()
 
 

@@ -8,16 +8,17 @@ import pwd
 import stat
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, replace
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Protocol
 
 from .coordinator import TickAction, UpdateCoordinator
+from .history import HistoryError, RunHistoryStore, history_path_for_state
 from .policy import Policy
 from .requests import UserRequest, load_request, request_path, task_request_path
 from .schedule import local_timezone
-from .state import StateStore
+from .state import StateError, StateStore
 from .workflow import WorkflowResult
 
 
@@ -46,6 +47,8 @@ class UpdateService:
         task_id: str = "update",
         interval_hours: int | None = None,
         response_minutes: int | None = None,
+        history_store: RunHistoryStore | None = None,
+        persist_output: bool = True,
     ) -> None:
         self.state_store = state_store
         self.coordinator = UpdateCoordinator(
@@ -60,6 +63,11 @@ class UpdateService:
         self.on_log = on_log
         self.lock_file = Path(lock_file) if lock_file is not None else None
         self.task_id = task_id
+        self.history_store = history_store or RunHistoryStore(
+            history_path_for_state(self.state_store.path),
+            file_mode=self.state_store.file_mode,
+        )
+        self.persist_output = persist_output
 
     def tick(self, now: datetime | None = None) -> TickAction:
         if self.lock_file is None:
@@ -79,26 +87,69 @@ class UpdateService:
         finally:
             os.close(descriptor)
 
+    def retry_failed(self, now: datetime | None = None) -> TickAction:
+        """Run a failed task again immediately; callers enforce authorization."""
+        current = now or self.clock()
+        if self.lock_file is None:
+            return self._retry_failed_locked(current)
+
+        self.lock_file.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        flags = os.O_CREAT | os.O_RDWR | os.O_CLOEXEC
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        descriptor = os.open(self.lock_file, flags, 0o600)
+        try:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return TickAction.WORKER_ALREADY_ACTIVE
+            return self._retry_failed_locked(current)
+        finally:
+            os.close(descriptor)
+
     def _tick_locked(self, now: datetime | None) -> TickAction:
         current = now or self.clock()
         state = self.state_store.load()
+        if not self.persist_output and state.last_output:
+            state = replace(state, last_output=())
+            self.state_store.save(state)
+        if state.phase == "failed" and self.task_id == "user-tools":
+            requests = self._read_requests(state.run_id)
+            if any(
+                request.action == "retry" and _request_is_recent(request, current)
+                for request in requests
+            ):
+                self.on_log("The user requested an immediate retry of personal tool updates.")
+                action = self.coordinator.retry_failed(current)
+                return self._run_workflow(action)
         requests = self._read_requests(state.run_id) if state.phase == "awaiting_response" else []
         action = self.coordinator.tick(current, requests)
         if action is TickAction.RECOVERED_INTERRUPTED_RUN:
             self.on_log(self.state_store.load().message)
+            self._record_history()
         if action is not TickAction.RUN:
             return action
 
+        return self._run_workflow(action)
+
+    def _retry_failed_locked(self, now: datetime) -> TickAction:
+        action = self.coordinator.retry_failed(now)
+        self.on_log("An authorized manual retry was requested.")
+        return self._run_workflow(action)
+
+    def _run_workflow(self, action: TickAction) -> TickAction:
         tail: deque[str] = deque(maxlen=200)
 
         def on_output(line: str) -> None:
             tail.append(line)
-            self.coordinator.record_output(tuple(tail))
+            if self.persist_output:
+                self.coordinator.record_output(tuple(tail))
             self.on_log(line)
 
         def on_idle(seconds: float) -> None:
             message = f"Update is still running; no new output for {int(seconds)} seconds."
-            self.coordinator.record_output(tuple(tail), message)
+            if self.persist_output:
+                self.coordinator.record_output(tuple(tail), message)
             self.on_log(message)
 
         try:
@@ -108,7 +159,15 @@ class UpdateService:
             on_output(f"Update worker failed: {exc}")
             returncode = 1
         self.coordinator.complete(returncode, self.clock())
+        self._record_history()
         return action
+
+    def _record_history(self) -> None:
+        task = "user-tools" if self.task_id == "update" else self.task_id
+        try:
+            self.history_store.append(task, self.state_store.load())
+        except (HistoryError, OSError, StateError) as exc:
+            self.on_log(f"Could not record recent run history: {exc}")
 
     def _read_requests(self, run_id: str | None) -> list[UserRequest]:
         if run_id is None:
@@ -132,6 +191,16 @@ class UpdateService:
             if request is not None:
                 requests.append(request)
         return requests
+
+
+def _request_is_recent(request: UserRequest, now: datetime) -> bool:
+    if request.submitted_at is None:
+        return False
+    submitted = datetime.fromisoformat(request.submitted_at)
+    if submitted.tzinfo is None:
+        return False
+    age = now - submitted.astimezone(now.tzinfo)
+    return timedelta(0) <= age <= timedelta(minutes=5)
 
 
 def local_request_homes() -> list[RequestHome]:
