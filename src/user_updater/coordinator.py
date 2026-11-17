@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from enum import StrEnum
 from uuid import uuid4
 
-from .policy import Policy, check_deferral
+from .policy import Policy, TaskRetryPolicy, check_deferral
 from .requests import UserRequest
 from .schedule import next_scheduled_after
 from .state import StateStore, UpdateState
@@ -31,11 +31,13 @@ class UpdateCoordinator:
         *,
         interval_hours: int | None = None,
         response_minutes: int | None = None,
+        retry_policy: TaskRetryPolicy | None = None,
     ) -> None:
         self.policy = policy
         self.state_store = state_store
         self.interval_hours = interval_hours
         self.response_minutes = response_minutes or policy.schedule.response_minutes
+        self.retry_policy = retry_policy or policy.retry.user_tools
 
     def tick(
         self,
@@ -50,6 +52,9 @@ class UpdateCoordinator:
                 UpdateState(
                     phase="failed",
                     run_id=state.run_id,
+                    retry_group_id=state.retry_group_id or state.run_id,
+                    automatic_retries_used=state.automatic_retries_used,
+                    manual_retries_used=state.manual_retries_used,
                     scheduled_for=state.scheduled_for,
                     next_scheduled_at=self._next_scheduled_at(now).isoformat(),
                     deferrals_used=state.deferrals_used,
@@ -65,6 +70,19 @@ class UpdateCoordinator:
             )
             return TickAction.RECOVERED_INTERRUPTED_RUN
 
+        if state.phase == "failed":
+            if (
+                state.retry_after is not None
+                and state.automatic_retries_used < self.retry_policy.automatic_attempts
+            ):
+                retry_at = _parse_datetime(state.retry_after, "retry_after")
+                if now < retry_at:
+                    return TickAction.NOT_DUE
+                return self.retry_failed(now, automatic=True)
+            if state.retry_after is not None:
+                state = UpdateState(**{**state.__dict__, "retry_after": None})
+                self.state_store.save(state)
+
         if state.phase == "awaiting_response":
             return self._handle_response_window(state, now, requests)
 
@@ -75,6 +93,9 @@ class UpdateCoordinator:
             resumed = UpdateState(
                 phase="awaiting_response",
                 run_id=state.run_id,
+                retry_group_id=state.retry_group_id or state.run_id,
+                automatic_retries_used=state.automatic_retries_used,
+                manual_retries_used=state.manual_retries_used,
                 scheduled_for=state.scheduled_for,
                 next_scheduled_at=state.next_scheduled_at,
                 response_deadline=(now + timedelta(minutes=self.response_minutes)).isoformat(),
@@ -97,9 +118,11 @@ class UpdateCoordinator:
                 self.state_store.save(UpdateState(next_scheduled_at=due_at.isoformat()))
             return TickAction.NOT_DUE
 
+        new_run_id = uuid4().hex
         pending = UpdateState(
             phase="awaiting_response",
-            run_id=uuid4().hex,
+            run_id=new_run_id,
+            retry_group_id=new_run_id,
             scheduled_for=due_at.isoformat(),
             next_scheduled_at=due_at.isoformat(),
             response_deadline=(now + timedelta(minutes=self.response_minutes)).isoformat(),
@@ -126,10 +149,19 @@ class UpdateCoordinator:
     def complete(self, returncode: int, now: datetime, message: str | None = None) -> None:
         state = self.state_store.load()
         success = returncode == 0
+        retry_after = None
+        if not success and state.automatic_retries_used < self.retry_policy.automatic_attempts:
+            retry_after = (
+                now + timedelta(minutes=self.retry_policy.delay_minutes)
+            ).isoformat()
         self.state_store.save(
             UpdateState(
                 phase="succeeded" if success else "failed",
                 run_id=state.run_id,
+                retry_group_id=state.retry_group_id or state.run_id,
+                automatic_retries_used=state.automatic_retries_used,
+                manual_retries_used=state.manual_retries_used,
+                retry_after=retry_after,
                 scheduled_for=state.scheduled_for,
                 next_scheduled_at=self._next_scheduled_at(now).isoformat(),
                 deferrals_used=state.deferrals_used,
@@ -142,19 +174,40 @@ class UpdateCoordinator:
             )
         )
 
-    def retry_failed(self, now: datetime) -> TickAction:
-        """Start a fresh run from a failed state after an explicit retry request."""
+    def retry_failed(self, now: datetime, *, automatic: bool = False) -> TickAction:
+        """Start a bounded automatic retry or user-requested retry."""
         state = self.state_store.load()
         if state.phase != "failed":
             raise ValueError("only a failed update can be retried")
+        if automatic:
+            if state.automatic_retries_used >= self.retry_policy.automatic_attempts:
+                raise ValueError("automatic retry limit has been reached")
+            if state.retry_after is None or now < _parse_datetime(state.retry_after, "retry_after"):
+                raise ValueError("automatic retry is not due yet")
+        elif state.manual_retries_used >= self.retry_policy.user_manual_attempts:
+            raise ValueError("manual retry limit has been reached")
         self.state_store.save(
             UpdateState(
                 phase="running",
                 run_id=uuid4().hex,
+                retry_group_id=state.retry_group_id or state.run_id,
+                automatic_retries_used=(
+                    state.automatic_retries_used + 1
+                    if automatic
+                    else state.automatic_retries_used
+                ),
+                manual_retries_used=(
+                    state.manual_retries_used if automatic else state.manual_retries_used + 1
+                ),
+                retry_after=None,
                 scheduled_for=now.isoformat(),
                 next_scheduled_at=state.next_scheduled_at,
                 started_at=now.isoformat(),
-                message="A manually requested retry is running.",
+                message=(
+                    "An automatic retry is running."
+                    if automatic
+                    else "A manually requested retry is running."
+                ),
             )
         )
         return TickAction.RUN
@@ -187,6 +240,9 @@ class UpdateCoordinator:
                 UpdateState(
                     phase="deferred",
                     run_id=state.run_id,
+                    retry_group_id=state.retry_group_id or state.run_id,
+                    automatic_retries_used=state.automatic_retries_used,
+                    manual_retries_used=state.manual_retries_used,
                     scheduled_for=state.scheduled_for,
                     next_scheduled_at=state.next_scheduled_at,
                     deferred_until=deferred_until.isoformat(),
@@ -212,6 +268,9 @@ class UpdateCoordinator:
             UpdateState(
                 phase="running",
                 run_id=state.run_id,
+                retry_group_id=state.retry_group_id or state.run_id,
+                automatic_retries_used=state.automatic_retries_used,
+                manual_retries_used=state.manual_retries_used,
                 scheduled_for=state.scheduled_for,
                 next_scheduled_at=state.next_scheduled_at,
                 deferrals_used=state.deferrals_used,

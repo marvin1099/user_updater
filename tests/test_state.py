@@ -27,6 +27,22 @@ def test_missing_state_starts_with_idle_state(tmp_path: Path) -> None:
     assert StateStore(tmp_path / "state.json").load() == UpdateState()
 
 
+def test_state_store_round_trips_retry_group_and_counters(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "state.json")
+    expected = UpdateState(
+        phase="failed",
+        run_id="attempt-2",
+        retry_group_id="scheduled-run",
+        automatic_retries_used=1,
+        manual_retries_used=2,
+        retry_after="2026-11-15T03:15:00+00:00",
+    )
+
+    store.save(expected)
+
+    assert store.load() == expected
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [
@@ -37,6 +53,8 @@ def test_missing_state_starts_with_idle_state(tmp_path: Path) -> None:
         ("deferrals_used", -1),
         ("deferrals_used", True),
         ("returncode", "0"),
+        ("automatic_retries_used", -1),
+        ("manual_retries_used", True),
     ],
 )
 def test_state_store_rejects_invalid_field_types_and_values(

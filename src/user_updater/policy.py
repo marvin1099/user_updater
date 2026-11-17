@@ -35,6 +35,18 @@ _DEFAULTS: dict[str, Any] = {
         "user_tools": list(_USER_TOOLS),
         "allow_custom_user_tools": True,
     },
+    "retry": {
+        "system": {
+            "automatic_attempts": 2,
+            "delay_minutes": 15,
+            "user_manual_attempts": 0,
+        },
+        "user_tools": {
+            "automatic_attempts": 2,
+            "delay_minutes": 15,
+            "user_manual_attempts": 0,
+        },
+    },
     "security": {"builder_sudo_mode": "package-manager"},
 }
 
@@ -69,6 +81,19 @@ class UpdatePolicy:
 
 
 @dataclass(frozen=True)
+class TaskRetryPolicy:
+    automatic_attempts: int
+    delay_minutes: int
+    user_manual_attempts: int
+
+
+@dataclass(frozen=True)
+class RetryPolicy:
+    system: TaskRetryPolicy
+    user_tools: TaskRetryPolicy
+
+
+@dataclass(frozen=True)
 class SecurityPolicy:
     builder_sudo_mode: str
 
@@ -79,6 +104,7 @@ class Policy:
     schedule: SchedulePolicy
     interaction: InteractionPolicy
     updates: UpdatePolicy
+    retry: RetryPolicy
     security: SecurityPolicy
 
 
@@ -130,6 +156,14 @@ def policy_to_mapping(policy: Policy) -> dict[str, Any]:
             "run_user_tools": policy.updates.run_user_tools,
             "user_tools": list(policy.updates.user_tools),
             "allow_custom_user_tools": policy.updates.allow_custom_user_tools,
+        },
+        "retry": {
+            task: {
+                "automatic_attempts": getattr(policy.retry, task).automatic_attempts,
+                "delay_minutes": getattr(policy.retry, task).delay_minutes,
+                "user_manual_attempts": getattr(policy.retry, task).user_manual_attempts,
+            }
+            for task in ("system", "user_tools")
         },
         "security": {"builder_sudo_mode": policy.security.builder_sudo_mode},
     }
@@ -294,6 +328,12 @@ def _make_policy(raw: dict[str, Any]) -> Policy:
         ),
     )
 
+    retry_raw = raw["retry"]
+    retry = RetryPolicy(
+        system=_make_task_retry_policy(retry_raw["system"], "retry.system"),
+        user_tools=_make_task_retry_policy(retry_raw["user_tools"], "retry.user_tools"),
+    )
+
     security_raw = raw["security"]
     sudo_mode = security_raw["builder_sudo_mode"]
     if sudo_mode not in _SUDO_MODES:
@@ -305,7 +345,22 @@ def _make_policy(raw: dict[str, Any]) -> Policy:
         schedule=schedule,
         interaction=interaction,
         updates=updates,
+        retry=retry,
         security=security,
+    )
+
+
+def _make_task_retry_policy(raw: dict[str, Any], name: str) -> TaskRetryPolicy:
+    return TaskRetryPolicy(
+        automatic_attempts=_integer(
+            raw["automatic_attempts"], f"{name}.automatic_attempts", minimum=0, maximum=5
+        ),
+        delay_minutes=_integer(
+            raw["delay_minutes"], f"{name}.delay_minutes", minimum=1, maximum=1440
+        ),
+        user_manual_attempts=_integer(
+            raw["user_manual_attempts"], f"{name}.user_manual_attempts", minimum=0, maximum=5
+        ),
     )
 
 

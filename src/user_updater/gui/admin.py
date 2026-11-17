@@ -83,9 +83,42 @@ class AdminSettingsDialog(QDialog):
         user_form.addRow("Response window (minutes)", self.user_response)
         form.addRow(user_schedule)
 
+        retry_group = QGroupBox("Retry behavior")
+        retry_layout = QVBoxLayout(retry_group)
+        retry_layout.addWidget(
+            QLabel(
+                "Automatic retries run after a failure. User-requested retries are capped "
+                "per scheduled update; system retries still require polkit authorization."
+            )
+        )
+        system_retry_group = QGroupBox("System updates")
+        system_retry_form = QFormLayout(system_retry_group)
+        self.system_automatic_retries = _spin(
+            policy.retry.system.automatic_attempts, 0, 5
+        )
+        self.system_retry_delay = _spin(policy.retry.system.delay_minutes, 1, 1440)
+        self.system_user_retries = _spin(policy.retry.system.user_manual_attempts, 0, 5)
+        system_retry_form.addRow("Automatic retry attempts", self.system_automatic_retries)
+        system_retry_form.addRow("Delay between attempts (minutes)", self.system_retry_delay)
+        system_retry_form.addRow("User-requested retries per run", self.system_user_retries)
+        retry_layout.addWidget(system_retry_group)
+
+        user_retry_group = QGroupBox("Personal user tools")
+        user_retry_form = QFormLayout(user_retry_group)
+        self.user_tools_automatic_retries = _spin(
+            policy.retry.user_tools.automatic_attempts, 0, 5
+        )
+        self.user_tools_retry_delay = _spin(policy.retry.user_tools.delay_minutes, 1, 1440)
+        self.user_tools_user_retries = _spin(policy.retry.user_tools.user_manual_attempts, 0, 5)
+        user_retry_form.addRow("Automatic retry attempts", self.user_tools_automatic_retries)
+        user_retry_form.addRow("Delay between attempts (minutes)", self.user_tools_retry_delay)
+        user_retry_form.addRow("User-requested retries per run", self.user_tools_user_retries)
+        retry_layout.addWidget(user_retry_group)
+        form.addRow(retry_group)
+
         interaction = QGroupBox("Rescheduling")
         interaction_form = QFormLayout(interaction)
-        self.allow_deferral = QCheckBox("Allow users to reschedule")
+        self.allow_deferral = QCheckBox("Allow users to reschedule personal-tool updates")
         self.allow_deferral.setChecked(policy.interaction.allow_deferral)
         self.deferral_options = QLineEdit(
             ", ".join(str(value) for value in policy.interaction.deferral_options_hours)
@@ -96,7 +129,7 @@ class AdminSettingsDialog(QDialog):
         interaction_form.addRow("Maximum per scheduled run", self.max_deferrals)
         form.addRow(interaction)
 
-        tools_group = QGroupBox("Built-in personal tools")
+        tools_group = QGroupBox("Personal tools available to users")
         tools_layout = QHBoxLayout(tools_group)
         self.tool_checks: dict[str, QCheckBox] = {}
         for tool in _TOOLS:
@@ -105,6 +138,12 @@ class AdminSettingsDialog(QDialog):
             self.tool_checks[tool] = check
             tools_layout.addWidget(check)
         form.addRow(tools_group)
+        tools_note = QLabel(
+            "This is the administrator allow-list. Users may turn off any listed tool "
+            "for their own account, but cannot enable tools removed here."
+        )
+        tools_note.setWordWrap(True)
+        form.addRow(tools_note)
 
         self.builder_sudo_mode = QComboBox()
         self.builder_sudo_mode.addItem("Package manager only (recommended)", "package-manager")
@@ -166,6 +205,21 @@ class AdminSettingsDialog(QDialog):
                 run_user_tools=self.run_user_tools.isChecked(),
                 user_tools=tuple(tool for tool in _TOOLS if self.tool_checks[tool].isChecked()),
                 allow_custom_user_tools=self.allow_custom_tools.isChecked(),
+            ),
+            retry=replace(
+                self.policy.retry,
+                system=replace(
+                    self.policy.retry.system,
+                    automatic_attempts=self.system_automatic_retries.value(),
+                    delay_minutes=self.system_retry_delay.value(),
+                    user_manual_attempts=self.system_user_retries.value(),
+                ),
+                user_tools=replace(
+                    self.policy.retry.user_tools,
+                    automatic_attempts=self.user_tools_automatic_retries.value(),
+                    delay_minutes=self.user_tools_retry_delay.value(),
+                    user_manual_attempts=self.user_tools_user_retries.value(),
+                ),
             ),
             security=replace(
                 self.policy.security,

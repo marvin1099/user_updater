@@ -13,6 +13,7 @@ from ..paths import system_paths, user_paths
 from ..policy import load_policy
 from ..requests import task_request_path
 from ..state import StateStore
+from ..tool_preferences import UserToolPreferenceStore
 from .admin import open_admin_settings, start_system_retry
 from .full_window import FullDetailsWindow
 from .window import UpdaterWindow
@@ -30,6 +31,10 @@ def run_gui(system_mode: bool = False) -> int:
     system_state = StateStore(paths.state) if system_mode else None
     user_request = task_request_path(home, "user-tools")
     system_request = task_request_path(home, "system") if system_mode else None
+    user_tool_preferences = UserToolPreferenceStore(
+        home / ".config" / "user_updater" / "tool_preferences.json",
+        owner_uid=os.getuid(),
+    )
     window = UpdaterWindow(
         policy,
         user_state,
@@ -44,7 +49,11 @@ def run_gui(system_mode: bool = False) -> int:
         system_enabled=system_mode and policy.updates.run_system,
         user_tools_enabled=policy.updates.run_user_tools,
         user_request_file=user_request,
-        system_logs_visible=os.geteuid() == 0,
+        system_output_visible=True,
+        system_manual_retry_limit=policy.retry.system.user_manual_attempts,
+        user_manual_retry_limit=policy.retry.user_tools.user_manual_attempts,
+        admin_allowed_user_tools=policy.updates.user_tools,
+        user_tool_preferences=user_tool_preferences,
     )
 
     def show_full_details() -> None:
@@ -65,7 +74,16 @@ def run_gui(system_mode: bool = False) -> int:
     def policy_saved(updated_policy) -> None:
         window.apply_policy(updated_policy)
         full_window.system_enabled = system_mode and updated_policy.updates.run_system
-        full_window.user_tools_enabled = updated_policy.updates.run_user_tools
+        full_window.system_manual_retry_limit = (
+            updated_policy.retry.system.user_manual_attempts
+        )
+        full_window.user_manual_retry_limit = (
+            updated_policy.retry.user_tools.user_manual_attempts
+        )
+        full_window.apply_user_tool_policy(
+            updated_policy.updates.run_user_tools,
+            updated_policy.updates.user_tools,
+        )
         full_window.refresh()
 
     window.full_mode_requested.connect(show_full_details)

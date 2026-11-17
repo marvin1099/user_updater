@@ -9,6 +9,8 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QFontDatabase, QTextCursor
 from PySide6.QtWidgets import (
+    QCheckBox,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QPlainTextEdit,
@@ -21,6 +23,7 @@ from PySide6.QtWidgets import (
 from ..history import HistoryError, RunHistoryStore, RunRecord, history_path_for_state
 from ..requests import UserRequest, save_request
 from ..state import StateError, StateStore, UpdateState
+from ..tool_preferences import ToolPreferenceError, UserToolPreferenceStore
 from .placement import WindowPlacement
 
 _ACTIVE_PHASES = {"awaiting_response", "running", "deferred"}
@@ -32,6 +35,20 @@ class _TaskTab(QWidget):
         self.status = QLabel(f"{title}: waiting")
         self.elapsed = QLabel("Elapsed: —")
         self.next_run = QLabel("Next scheduled: —")
+        self.tools_group = QGroupBox("Personal tools enabled for your account")
+        self.tool_checks_widget = QWidget(self.tools_group)
+        self.tool_check_layout = QHBoxLayout(self.tool_checks_widget)
+        self.tool_check_layout.setContentsMargins(0, 0, 0, 0)
+        self.tool_checkboxes: dict[str, QCheckBox] = {}
+        self.tool_preferences_status = QLabel("")
+        self.save_tools_button = QPushButton("Save tool choices")
+        tools_layout = QVBoxLayout(self.tools_group)
+        tools_layout.addWidget(self.tool_checks_widget)
+        tools_controls = QHBoxLayout()
+        tools_controls.addWidget(self.tool_preferences_status, stretch=1)
+        tools_controls.addWidget(self.save_tools_button)
+        tools_layout.addLayout(tools_controls)
+        self.tools_group.hide()
         self.terminal = QPlainTextEdit()
         self.retry_button = QPushButton("Retry failed update")
         self.retry_button.setObjectName("retry")
@@ -46,6 +63,7 @@ class _TaskTab(QWidget):
         heading.addWidget(self.elapsed)
         layout.addLayout(heading)
         layout.addWidget(self.next_run)
+        layout.addWidget(self.tools_group)
         layout.addWidget(self.terminal, stretch=1)
         controls = QHBoxLayout()
         controls.addStretch(1)
@@ -58,6 +76,7 @@ class _TaskTab(QWidget):
         state: UpdateState,
         *,
         retry_enabled: bool = False,
+        retry_remaining: int = 0,
         retry_pending: bool = False,
     ) -> None:
         self.status.setText(f"{title}: {state.phase.replace('_', ' ').title()} — {state.message}")
@@ -65,9 +84,12 @@ class _TaskTab(QWidget):
             self.status.setText(f"{title}: retry requested — waiting for the updater.")
         self.elapsed.setText(f"Elapsed: {_elapsed_text(state)}")
         self.next_run.setText(f"Next scheduled: {_format_datetime(state.next_scheduled_at)}")
-        self.retry_button.setVisible(retry_enabled and state.phase == "failed")
+        can_retry = retry_enabled and state.phase == "failed"
+        self.retry_button.setVisible(can_retry)
+        if can_retry:
+            self.retry_button.setText(f"Retry failed update ({retry_remaining} left)")
         self.retry_button.setEnabled(not retry_pending)
-        text = "\n".join(state.last_output)
+        text = "\n".join(state.last_output[-200:])
         if text != self.terminal.toPlainText():
             self.terminal.setPlainText(text)
             self.terminal.moveCursor(QTextCursor.MoveOperation.End)
@@ -88,7 +110,11 @@ class FullDetailsWindow(QWidget):
         system_enabled: bool = True,
         user_tools_enabled: bool = True,
         user_request_file: Path | None = None,
-        system_logs_visible: bool = False,
+        system_output_visible: bool = True,
+        system_manual_retry_limit: int = 0,
+        user_manual_retry_limit: int = 0,
+        admin_allowed_user_tools: tuple[str, ...] = (),
+        user_tool_preferences: UserToolPreferenceStore | None = None,
         system_history_store: RunHistoryStore | None = None,
         user_history_store: RunHistoryStore | None = None,
         parent: QWidget | None = None,
@@ -98,8 +124,12 @@ class FullDetailsWindow(QWidget):
         self.user_state_store = user_state_store
         self.system_enabled = system_enabled
         self.user_tools_enabled = user_tools_enabled
+        self.system_output_visible = system_output_visible
+        self.system_manual_retry_limit = system_manual_retry_limit
+        self.user_manual_retry_limit = user_manual_retry_limit
         self.user_request_file = Path(user_request_file) if user_request_file else None
-        self.system_logs_visible = system_logs_visible
+        self.user_tool_preferences = user_tool_preferences
+        self.admin_allowed_user_tools = tuple(admin_allowed_user_tools)
         self.system_history_store = system_history_store or (
             RunHistoryStore(history_path_for_state(system_state_store.path), file_mode=0o644)
             if system_state_store is not None
@@ -141,6 +171,8 @@ class FullDetailsWindow(QWidget):
         self.tabs.addTab(self.history_view, "Run history")
         self.system_tab.retry_button.clicked.connect(self.system_retry_requested.emit)
         self.user_tab.retry_button.clicked.connect(self._submit_user_retry)
+        self.user_tab.save_tools_button.clicked.connect(self._save_user_tool_preferences)
+        self._configure_user_tool_choices()
         self.back_button = QPushButton("Back to minimal view")
         self.back_button.clicked.connect(self._return_to_minimal)
 
@@ -162,7 +194,7 @@ class FullDetailsWindow(QWidget):
         system_state = self._read_state(
             self.system_state_store,
             self.system_enabled,
-            include_output=self.system_logs_visible,
+            include_output=self.system_output_visible,
         )
         user_state = self._read_state(self.user_state_store, self.user_tools_enabled)
         if user_state.run_id != self._user_retry_requested_for:
@@ -178,7 +210,13 @@ class FullDetailsWindow(QWidget):
         self.system_tab.update_state(
             "System updates",
             system_state,
-            retry_enabled=self.system_enabled,
+            retry_enabled=(
+                self.system_enabled
+                and system_state.manual_retries_used < self.system_manual_retry_limit
+            ),
+            retry_remaining=max(
+                0, self.system_manual_retry_limit - system_state.manual_retries_used
+            ),
             retry_pending=(
                 system_state.run_id is not None
                 and system_state.run_id == self._system_retry_requested_for
@@ -187,7 +225,14 @@ class FullDetailsWindow(QWidget):
         self.user_tab.update_state(
             "Your user tools",
             user_state,
-            retry_enabled=self.user_tools_enabled and self.user_request_file is not None,
+            retry_enabled=(
+                self.user_tools_enabled
+                and self.user_request_file is not None
+                and user_state.manual_retries_used < self.user_manual_retry_limit
+            ),
+            retry_remaining=max(
+                0, self.user_manual_retry_limit - user_state.manual_retries_used
+            ),
             retry_pending=(
                 user_state.run_id is not None
                 and user_state.run_id == self._user_retry_requested_for
@@ -236,11 +281,59 @@ class FullDetailsWindow(QWidget):
             state = self.user_state_store.load()
             if state.phase != "failed" or state.run_id is None or self.user_request_file is None:
                 return
+            if state.manual_retries_used >= self.user_manual_retry_limit:
+                return
             save_request(self.user_request_file, UserRequest(state.run_id, "retry"))
             self._user_retry_requested_for = state.run_id
             self.refresh()
         except (OSError, StateError, ValueError) as exc:
             self.user_tab.status.setText(f"Your user tools: could not request retry: {exc}")
+
+    def apply_user_tool_policy(self, enabled: bool, admin_allowed_tools: tuple[str, ...]) -> None:
+        """Refresh user-selectable choices after an administrator policy change."""
+        self.user_tools_enabled = enabled
+        self.admin_allowed_user_tools = tuple(admin_allowed_tools)
+        self._configure_user_tool_choices()
+        self.refresh()
+
+    def _configure_user_tool_choices(self) -> None:
+        while self.user_tab.tool_check_layout.count():
+            item = self.user_tab.tool_check_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self.user_tab.tool_checkboxes.clear()
+        tools = self.admin_allowed_user_tools
+        selected = set(tools)
+        if self.user_tool_preferences is not None:
+            try:
+                selected = set(self.user_tool_preferences.load(tools))
+                self.user_tab.tool_preferences_status.setText("")
+            except ToolPreferenceError as exc:
+                self.user_tab.tool_preferences_status.setText(
+                    f"Preferences unavailable; using admin defaults: {exc}"
+                )
+        for tool in tools:
+            check = QCheckBox(tool)
+            check.setChecked(tool in selected)
+            self.user_tab.tool_checkboxes[tool] = check
+            self.user_tab.tool_check_layout.addWidget(check)
+        visible = bool(tools) and self.user_tools_enabled and self.user_tool_preferences is not None
+        self.user_tab.tools_group.setVisible(visible)
+
+    def _save_user_tool_preferences(self) -> None:
+        if self.user_tool_preferences is None or not self.user_tools_enabled:
+            return
+        selected = tuple(
+            tool for tool, check in self.user_tab.tool_checkboxes.items() if check.isChecked()
+        )
+        try:
+            self.user_tool_preferences.save(selected, self.admin_allowed_user_tools)
+            self.user_tab.tool_preferences_status.setText(
+                "Saved; choices apply to the next personal-tool run."
+            )
+        except ToolPreferenceError as exc:
+            self.user_tab.tool_preferences_status.setText(f"Could not save choices: {exc}")
 
     def _refresh_history(self) -> None:
         records: list[RunRecord] = []

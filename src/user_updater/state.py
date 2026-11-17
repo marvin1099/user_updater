@@ -18,6 +18,8 @@ _OPTIONAL_TEXT_FIELDS = {
     "deferred_until",
     "started_at",
     "finished_at",
+    "retry_group_id",
+    "retry_after",
 }
 
 
@@ -30,6 +32,10 @@ class UpdateState:
     phase: str = "idle"
     next_scheduled_at: str | None = None
     run_id: str | None = None
+    retry_group_id: str | None = None
+    automatic_retries_used: int = 0
+    manual_retries_used: int = 0
+    retry_after: str | None = None
     scheduled_for: str | None = None
     response_deadline: str | None = None
     deferred_until: str | None = None
@@ -61,6 +67,10 @@ class UpdateState:
         deferrals_used = values.get("deferrals_used", 0)
         if type(deferrals_used) is not int or deferrals_used < 0:
             raise StateError("deferrals_used must be a non-negative integer")
+        for name in ("automatic_retries_used", "manual_retries_used"):
+            retry_count = values.get(name, 0)
+            if type(retry_count) is not int or retry_count < 0:
+                raise StateError(f"{name} must be a non-negative integer")
         returncode = values.get("returncode")
         if returncode is not None and type(returncode) is not int:
             raise StateError("returncode must be an integer or null")

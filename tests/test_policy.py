@@ -26,6 +26,65 @@ def test_default_policy_matches_product_defaults() -> None:
     assert policy.updates.run_system is True
     assert "flatpak" in policy.updates.user_tools
     assert policy.updates.allow_custom_user_tools is True
+    assert policy.retry.system.automatic_attempts == 2
+    assert policy.retry.system.delay_minutes == 15
+    assert policy.retry.system.user_manual_attempts == 0
+    assert policy.retry.user_tools.automatic_attempts == 2
+    assert policy.retry.user_tools.user_manual_attempts == 0
+
+
+def test_administrator_can_configure_automatic_and_user_retry_limits(tmp_path: Path) -> None:
+    config = tmp_path / "project.yaml"
+    config.write_text(
+        """
+version: 1
+retry:
+  system:
+    automatic_attempts: 4
+    delay_minutes: 30
+    user_manual_attempts: 2
+  user_tools:
+    automatic_attempts: 1
+    delay_minutes: 5
+    user_manual_attempts: 3
+""",
+        encoding="utf-8",
+    )
+
+    policy = load_policy(config)
+
+    assert policy.retry.system.automatic_attempts == 4
+    assert policy.retry.system.delay_minutes == 30
+    assert policy.retry.system.user_manual_attempts == 2
+    assert policy.retry.user_tools.automatic_attempts == 1
+    assert policy.retry.user_tools.delay_minutes == 5
+    assert policy.retry.user_tools.user_manual_attempts == 3
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("automatic_attempts", 6),
+        ("delay_minutes", 0),
+        ("user_manual_attempts", -1),
+    ],
+)
+def test_retry_policy_rejects_out_of_range_limits(
+    tmp_path: Path, key: str, value: int
+) -> None:
+    config = tmp_path / "project.yaml"
+    config.write_text(
+        f"""
+version: 1
+retry:
+  user_tools:
+    {key}: {value}
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(PolicyError, match=key):
+        load_policy(config)
 
 
 def test_admin_can_disable_rescheduling_without_disabling_response_window(

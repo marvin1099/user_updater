@@ -8,14 +8,14 @@ import pwd
 import stat
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Protocol
 
 from .coordinator import TickAction, UpdateCoordinator
 from .history import HistoryError, RunHistoryStore, history_path_for_state
-from .policy import Policy
+from .policy import Policy, TaskRetryPolicy
 from .requests import UserRequest, load_request, request_path, task_request_path
 from .schedule import local_timezone
 from .state import StateError, StateStore
@@ -48,14 +48,18 @@ class UpdateService:
         interval_hours: int | None = None,
         response_minutes: int | None = None,
         history_store: RunHistoryStore | None = None,
-        persist_output: bool = True,
+        retry_policy: TaskRetryPolicy | None = None,
     ) -> None:
         self.state_store = state_store
+        selected_retry_policy = retry_policy or (
+            policy.retry.system if task_id == "system" else policy.retry.user_tools
+        )
         self.coordinator = UpdateCoordinator(
             policy,
             state_store,
             interval_hours=interval_hours,
             response_minutes=response_minutes,
+            retry_policy=selected_retry_policy,
         )
         self.workflow = workflow
         self.request_homes = request_homes or local_request_homes
@@ -67,7 +71,6 @@ class UpdateService:
             history_path_for_state(self.state_store.path),
             file_mode=self.state_store.file_mode,
         )
-        self.persist_output = persist_output
 
     def tick(self, now: datetime | None = None) -> TickAction:
         if self.lock_file is None:
@@ -110,9 +113,6 @@ class UpdateService:
     def _tick_locked(self, now: datetime | None) -> TickAction:
         current = now or self.clock()
         state = self.state_store.load()
-        if not self.persist_output and state.last_output:
-            state = replace(state, last_output=())
-            self.state_store.save(state)
         if state.phase == "failed" and self.task_id == "user-tools":
             requests = self._read_requests(state.run_id)
             if any(
@@ -122,7 +122,10 @@ class UpdateService:
                 self.on_log("The user requested an immediate retry of personal tool updates.")
                 action = self.coordinator.retry_failed(current)
                 return self._run_workflow(action)
-        requests = self._read_requests(state.run_id) if state.phase == "awaiting_response" else []
+        if state.phase == "awaiting_response":
+            requests = self._read_requests(state.run_id, accept=self.task_id != "system")
+        else:
+            requests = []
         action = self.coordinator.tick(current, requests)
         if action is TickAction.RECOVERED_INTERRUPTED_RUN:
             self.on_log(self.state_store.load().message)
@@ -142,14 +145,12 @@ class UpdateService:
 
         def on_output(line: str) -> None:
             tail.append(line)
-            if self.persist_output:
-                self.coordinator.record_output(tuple(tail))
+            self.coordinator.record_output(tuple(tail))
             self.on_log(line)
 
         def on_idle(seconds: float) -> None:
             message = f"Update is still running; no new output for {int(seconds)} seconds."
-            if self.persist_output:
-                self.coordinator.record_output(tuple(tail), message)
+            self.coordinator.record_output(tuple(tail), message)
             self.on_log(message)
 
         try:
@@ -169,7 +170,7 @@ class UpdateService:
         except (HistoryError, OSError, StateError) as exc:
             self.on_log(f"Could not record recent run history: {exc}")
 
-    def _read_requests(self, run_id: str | None) -> list[UserRequest]:
+    def _read_requests(self, run_id: str | None, *, accept: bool = True) -> list[UserRequest]:
         if run_id is None:
             return []
         requests: list[UserRequest] = []
@@ -188,7 +189,7 @@ class UpdateService:
                 pass
             except OSError:
                 continue
-            if request is not None:
+            if accept and request is not None:
                 requests.append(request)
         return requests
 

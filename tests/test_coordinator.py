@@ -2,8 +2,10 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from user_updater.coordinator import TickAction, UpdateCoordinator
-from user_updater.policy import load_policy
+from user_updater.policy import TaskRetryPolicy, load_policy
 from user_updater.requests import UserRequest
 from user_updater.state import StateStore, UpdateState
 
@@ -179,6 +181,75 @@ def test_interrupted_run_is_recorded_without_an_immediate_retry(tmp_path: Path) 
     assert recovered.last_output == ("Installing package A", "Package A configured")
     assert "partial changes" in recovered.message
     assert "no immediate retry" in recovered.message
+
+
+def test_failed_update_retries_automatically_after_admin_delay_and_stops_at_limit(
+    tmp_path: Path,
+) -> None:
+    store = StateStore(tmp_path / "state.json")
+    store.save(
+        UpdateState(
+            phase="running",
+            run_id="attempt-0",
+            retry_group_id="scheduled-run",
+            next_scheduled_at=(NOW + timedelta(days=2)).isoformat(),
+            started_at=NOW.isoformat(),
+        )
+    )
+    policy = TaskRetryPolicy(
+        automatic_attempts=2,
+        delay_minutes=15,
+        user_manual_attempts=1,
+    )
+    coordinator = UpdateCoordinator(load_policy(), store, retry_policy=policy)
+
+    coordinator.complete(1, NOW)
+    first_failure = store.load()
+    retry_one_at = NOW + timedelta(minutes=15)
+    assert first_failure.retry_after == retry_one_at.isoformat()
+    assert coordinator.tick(retry_one_at - timedelta(seconds=1)) is TickAction.NOT_DUE
+    assert coordinator.tick(retry_one_at) is TickAction.RUN
+    retry_one = store.load()
+    assert retry_one.run_id != "attempt-0"
+    assert retry_one.retry_group_id == "scheduled-run"
+    assert retry_one.automatic_retries_used == 1
+
+    coordinator.complete(1, retry_one_at)
+    retry_two_at = retry_one_at + timedelta(minutes=15)
+    assert store.load().retry_after == retry_two_at.isoformat()
+    assert coordinator.tick(retry_two_at) is TickAction.RUN
+    assert store.load().automatic_retries_used == 2
+
+    coordinator.complete(1, retry_two_at)
+    exhausted = store.load()
+    assert exhausted.retry_after is None
+    assert exhausted.automatic_retries_used == 2
+    assert coordinator.tick(NOW + timedelta(days=1)) is TickAction.NOT_DUE
+
+
+def test_user_requested_retry_increments_and_enforces_admin_cap(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "state.json")
+    store.save(
+        UpdateState(
+            phase="failed",
+            run_id="failed-attempt",
+            retry_group_id="scheduled-run",
+            manual_retries_used=0,
+            next_scheduled_at=(NOW + timedelta(days=2)).isoformat(),
+        )
+    )
+    coordinator = UpdateCoordinator(
+        load_policy(),
+        store,
+        retry_policy=TaskRetryPolicy(0, 15, 1),
+    )
+
+    assert coordinator.retry_failed(NOW) is TickAction.RUN
+    assert store.load().manual_retries_used == 1
+    coordinator.complete(1, NOW)
+
+    with pytest.raises(ValueError, match="manual retry limit"):
+        coordinator.retry_failed(NOW + timedelta(minutes=1))
 
 
 def _store_due_now(tmp_path: Path) -> StateStore:

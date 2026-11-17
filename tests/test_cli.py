@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import threading
 from datetime import datetime
@@ -17,6 +18,7 @@ from user_updater.policy import load_policy
 from user_updater.requests import load_request, task_request_path
 from user_updater.sessions import DesktopUser
 from user_updater.state import StateStore, UpdateState
+from user_updater.tool_preferences import UserToolPreferenceStore
 
 
 class _Logger:
@@ -64,6 +66,65 @@ def test_system_and_per_user_jobs_are_independent_and_tick_in_parallel(
     assert len(observed) == 3
     assert len({state_path for state_path, _lock in observed}) == 3
     assert len({lock_path for _state_path, lock_path in observed}) == 3
+
+
+def test_cli_applies_owner_tool_preferences_within_admin_allow_list(
+    monkeypatch, tmp_path: Path
+) -> None:
+    home = tmp_path / "alice"
+    home.mkdir()
+    runtime = tmp_path / "runtime-alice"
+    paths = AppPaths(
+        policy=tmp_path / "project.yaml",
+        state=tmp_path / "system" / "state.json",
+        user_state_dir=tmp_path / "system" / "users",
+        builder_home=tmp_path / "system" / "builders",
+        sudoers=tmp_path / "sudoers",
+        request=tmp_path / "requests" / "user-tools.json",
+        log_file=tmp_path / "logs" / "updater.log",
+    )
+    paths.policy.write_text(
+        """
+version: 1
+updates:
+  run_system: false
+  run_user_tools: true
+  user_tools: [flatpak, pipx]
+""",
+        encoding="utf-8",
+    )
+    preferences = UserToolPreferenceStore(
+        home / ".config" / "user_updater" / "tool_preferences.json",
+        owner_uid=os.getuid(),
+    )
+    preference_path = preferences.path
+    preference_path.parent.mkdir(parents=True)
+    # Simulate a saved choice from before the administrator removed cargo.
+    preference_path.write_text(
+        json.dumps({"version": 1, "tools": ["flatpak", "cargo"]}),
+        encoding="utf-8",
+    )
+    preference_path.chmod(0o600)
+    user = DesktopUser("alice", os.getuid(), os.getgid(), home, runtime)
+    observed: list[tuple[str, ...]] = []
+
+    class PreferenceService:
+        def __init__(self, policy, *_args, **_kwargs) -> None:
+            observed.append(policy.updates.user_tools)
+
+        def tick(self) -> TickAction:
+            return TickAction.NOT_DUE
+
+    monkeypatch.setattr(cli, "system_paths", lambda: paths)
+    monkeypatch.setattr(cli, "configure_logging", lambda *_args, **_kwargs: _Logger())
+    monkeypatch.setattr(cli, "_require_root", lambda _action: None)
+    monkeypatch.setattr(cli, "detect_graphical_users", lambda: [user])
+    monkeypatch.setattr(cli, "UpdateService", PreferenceService)
+
+    result = cli._tick(system_mode=True)
+
+    assert result == 0
+    assert observed == [("flatpak",)]
 
 
 def test_history_command_shows_recent_personal_tool_runs(
@@ -142,11 +203,23 @@ def test_user_retry_command_creates_only_a_retry_request_for_a_failed_run(
         request=tmp_path / "request.json",
         log_file=tmp_path / "updater.log",
     )
+    paths.policy.write_text(
+        "retry:\n  user_tools:\n    user_manual_attempts: 1\n", encoding="utf-8"
+    )
     StateStore(paths.state).save(
         UpdateState(phase="failed", run_id="failed-user-run", returncode=1)
     )
     monkeypatch.setattr(cli, "user_paths", lambda: paths)
-    monkeypatch.setattr(cli, "system_paths", lambda: paths)
+    managed_paths = AppPaths(
+        policy=tmp_path / "system-policy.yaml",
+        state=tmp_path / "managed-state.json",
+        user_state_dir=tmp_path / "managed-users",
+        builder_home=tmp_path / "managed-builders",
+        sudoers=tmp_path / "sudoers",
+        request=tmp_path / "managed-request.json",
+        log_file=tmp_path / "managed-updater.log",
+    )
+    monkeypatch.setattr(cli, "system_paths", lambda: managed_paths)
     monkeypatch.setattr(Path, "home", classmethod(lambda _cls: home))
     monkeypatch.setattr(cli, "_tick", lambda system_mode: 0 if not system_mode else 1)
 
@@ -179,13 +252,14 @@ def test_user_retry_targets_this_owners_system_managed_task_without_running_root
         request=tmp_path / "request.json",
         log_file=tmp_path / "updater.log",
     )
-    paths.policy.write_text("managed system policy", encoding="utf-8")
+    paths.policy.write_text(
+        "retry:\n  user_tools:\n    user_manual_attempts: 1\n", encoding="utf-8"
+    )
     uid = cli.os.getuid()
     StateStore(paths.user_state_dir / f"{uid}.json").save(
         UpdateState(phase="failed", run_id="managed-failed-run", returncode=1)
     )
     monkeypatch.setattr(cli, "system_paths", lambda: paths)
-    monkeypatch.setattr(cli, "load_policy", lambda _path=None: load_policy())
     monkeypatch.setattr(Path, "home", classmethod(lambda _cls: home))
     monkeypatch.setattr(
         cli,
@@ -239,8 +313,24 @@ def test_user_history_reads_only_the_callers_system_managed_history(
 def test_system_retry_uses_pkexec_instead_of_running_as_the_desktop_user(
     monkeypatch, tmp_path: Path, capsys
 ) -> None:
+    paths = AppPaths(
+        policy=tmp_path / "project.yaml",
+        state=tmp_path / "system-state.json",
+        user_state_dir=tmp_path / "users",
+        builder_home=tmp_path / "builders",
+        sudoers=tmp_path / "sudoers",
+        request=tmp_path / "request.json",
+        log_file=tmp_path / "updater.log",
+    )
+    paths.policy.write_text(
+        "retry:\n  system:\n    user_manual_attempts: 1\n", encoding="utf-8"
+    )
+    StateStore(paths.state).save(
+        UpdateState(phase="failed", run_id="failed-system-run", returncode=1)
+    )
     executable = tmp_path / "user-updater"
     observed: list[list[str]] = []
+    monkeypatch.setattr(cli, "system_paths", lambda: paths)
     monkeypatch.setattr(cli.os, "geteuid", lambda: 1000)
     monkeypatch.setattr(cli, "_executable_path", lambda: executable)
     monkeypatch.setattr(cli, "_require_trusted_system_install", lambda _path: None)

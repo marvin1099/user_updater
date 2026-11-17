@@ -25,6 +25,7 @@ from .requests import UserRequest, save_request, task_request_path
 from .service import RequestHome, UpdateService, local_request_homes
 from .sessions import DesktopUser, detect_graphical_users
 from .state import StateError, StateStore
+from .tool_preferences import ToolPreferenceError, UserToolPreferenceStore
 from .workflow import UpdateWorkflow
 
 
@@ -212,7 +213,6 @@ def _tick(system_mode: bool) -> int:
                     on_log=logger.info,
                     task_id="system",
                     lock_file=paths.state.parent / "locks" / "system.lock",
-                    persist_output=False,
                 ),
                 system_store,
             )
@@ -222,11 +222,8 @@ def _tick(system_mode: bool) -> int:
     if policy.updates.run_user_tools:
         desktop_users = detect_graphical_users() if system_mode else [_current_desktop_user()]
     if desktop_users:
-        user_policy = dataclasses.replace(
-            policy,
-            updates=dataclasses.replace(policy.updates, run_system=False),
-        )
         for user in desktop_users:
+            user_policy = _user_policy_for(user, policy, logger)
             user_state_path = (
                 paths.user_state_dir / f"{user.uid}.json" if system_mode else paths.state
             )
@@ -290,6 +287,19 @@ def _retry(system_mode: bool) -> int:
     if not system_mode:
         return _retry_user()
 
+    paths = system_paths()
+    policy = load_policy(paths.policy if paths.policy.exists() else None)
+    if not policy.updates.run_system:
+        raise ValueError("machine-wide updates are disabled by administrator policy")
+    state_store = StateStore(paths.state, file_mode=0o644)
+    state = state_store.load()
+    if state.phase != "failed":
+        raise ValueError("only a failed machine-wide update can be retried")
+    if state.manual_retries_used >= policy.retry.system.user_manual_attempts:
+        raise ValueError(
+            "user-requested system retries are disabled or exhausted by administrator policy"
+        )
+
     executable = _executable_path()
     if os.geteuid() != 0:
         _require_trusted_system_install(executable)
@@ -310,12 +320,7 @@ def _retry(system_mode: bool) -> int:
         return result.returncode
 
     _require_trusted_system_install(executable)
-    paths = system_paths()
     logger = configure_logging(paths.log_file)
-    policy = load_policy(paths.policy if paths.policy.exists() else None)
-    if not policy.updates.run_system:
-        raise ValueError("machine-wide updates are disabled by administrator policy")
-    state_store = StateStore(paths.state, file_mode=0o644)
     system_policy = dataclasses.replace(
         policy,
         updates=dataclasses.replace(
@@ -338,7 +343,6 @@ def _retry(system_mode: bool) -> int:
         on_log=logger.info,
         task_id="system",
         lock_file=paths.state.parent / "locks" / "system.lock",
-        persist_output=False,
     )
     action = service.retry_failed()
     if action is TickAction.WORKER_ALREADY_ACTIVE:
@@ -360,6 +364,10 @@ def _retry_user() -> int:
         state = StateStore(state_path, file_mode=0o644).load()
         if state.phase != "failed" or state.run_id is None:
             raise ValueError("only a failed personal-tool update can be retried")
+        if state.manual_retries_used >= policy.retry.user_tools.user_manual_attempts:
+            raise ValueError(
+                "user-requested personal-tool retries are disabled or exhausted by policy"
+            )
         save_request(
             task_request_path(Path.home(), "user-tools"),
             UserRequest(state.run_id, "retry"),
@@ -374,12 +382,38 @@ def _retry_user() -> int:
     state = StateStore(paths.state, file_mode=0o600).load()
     if state.phase != "failed" or state.run_id is None:
         raise ValueError("only a failed personal-tool update can be retried")
+    if state.manual_retries_used >= policy.retry.user_tools.user_manual_attempts:
+        raise ValueError("personal-tool retries are disabled or exhausted by administrator policy")
     save_request(
         task_request_path(Path.home(), "user-tools"),
         UserRequest(state.run_id, "retry"),
     )
     # The request is owner-written; the normal worker consumes it under its lock.
     return _tick(system_mode=False)
+
+
+def _user_policy_for(user: DesktopUser, policy, logger):
+    preferences = UserToolPreferenceStore(
+        user.home / ".config" / "user_updater" / "tool_preferences.json",
+        owner_uid=user.uid,
+    )
+    try:
+        selected_tools = preferences.load(policy.updates.user_tools)
+    except ToolPreferenceError as exc:
+        logger.info(
+            "Ignoring invalid personal tool preferences for %s; using admin defaults: %s",
+            user.username,
+            exc,
+        )
+        selected_tools = policy.updates.user_tools
+    return dataclasses.replace(
+        policy,
+        updates=dataclasses.replace(
+            policy.updates,
+            run_system=False,
+            user_tools=selected_tools,
+        ),
+    )
 
 
 def _history(system_mode: bool, limit: int) -> int:

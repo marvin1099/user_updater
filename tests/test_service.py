@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from user_updater.history import RunHistoryStore
-from user_updater.policy import load_policy
+from user_updater.policy import TaskRetryPolicy, load_policy
 from user_updater.requests import UserRequest, request_path, save_request, task_request_path
 from user_updater.service import RequestHome, UpdateService
 from user_updater.state import StateStore, UpdateState
@@ -153,6 +153,9 @@ def test_manual_retry_starts_a_new_run_for_a_failed_task(tmp_path: Path) -> None
         clock=lambda: NOW,
         interval_hours=24,
         lock_file=tmp_path / "locks" / "retry.lock",
+        retry_policy=TaskRetryPolicy(
+            automatic_attempts=2, delay_minutes=15, user_manual_attempts=1
+        ),
     )
 
     action = service.retry_failed(NOW)
@@ -180,7 +183,9 @@ def test_manual_retry_is_refused_unless_the_latest_state_failed(tmp_path: Path) 
     assert workflow.calls == 0
 
 
-def test_system_retry_keeps_output_in_root_log_not_shared_state(tmp_path: Path) -> None:
+def test_system_retry_keeps_a_bounded_read_only_output_preview_in_shared_state(
+    tmp_path: Path,
+) -> None:
     store = StateStore(tmp_path / "state.json", file_mode=0o644)
     store.save(UpdateState(phase="failed", run_id="old-system-run", returncode=1))
     messages: list[str] = []
@@ -190,18 +195,20 @@ def test_system_retry_keeps_output_in_root_log_not_shared_state(tmp_path: Path) 
         FakeWorkflow(),
         on_log=messages.append,
         task_id="system",
-        persist_output=False,
+        retry_policy=TaskRetryPolicy(2, 15, 1),
     )
 
     service.retry_failed(NOW)
 
     assert store.load().phase == "succeeded"
-    assert store.load().last_output == ()
+    assert store.load().last_output == ("fake topgrade completed",)
     assert "fake topgrade completed" in messages
     assert RunHistoryStore(tmp_path / "state.history.json").load()[0].phase == "succeeded"
 
 
-def test_system_tick_clears_legacy_output_from_shared_state(tmp_path: Path) -> None:
+def test_system_state_keeps_bounded_output_available_to_the_read_only_client(
+    tmp_path: Path,
+) -> None:
     store = StateStore(tmp_path / "state.json", file_mode=0o644)
     store.save(
         UpdateState(
@@ -211,18 +218,52 @@ def test_system_tick_clears_legacy_output_from_shared_state(tmp_path: Path) -> N
             last_output=("legacy private system output",),
         )
     )
-    service = UpdateService(
-        load_policy(),
-        store,
-        FakeWorkflow(),
-        task_id="system",
-        persist_output=False,
-    )
+    service = UpdateService(load_policy(), store, FakeWorkflow(), task_id="system")
 
     action = service.tick(NOW)
 
     assert action.value == "not_due"
-    assert store.load().last_output == ()
+    assert store.load().last_output == ("legacy private system output",)
+
+
+def test_automatic_retry_waits_for_configured_delay_and_runs_without_user_action(
+    tmp_path: Path,
+) -> None:
+    retry_at = NOW + timedelta(minutes=15)
+    store = StateStore(tmp_path / "system.json", file_mode=0o644)
+    store.save(
+        UpdateState(
+            phase="failed",
+            run_id="attempt-0",
+            retry_group_id="scheduled-run",
+            next_scheduled_at=(NOW + timedelta(days=2)).isoformat(),
+            retry_after=retry_at.isoformat(),
+            returncode=1,
+        )
+    )
+    workflow = FakeWorkflow()
+    service = UpdateService(
+        load_policy(),
+        store,
+        workflow,
+        clock=lambda: retry_at,
+        task_id="system",
+        retry_policy=TaskRetryPolicy(
+            automatic_attempts=1, delay_minutes=15, user_manual_attempts=0
+        ),
+    )
+
+    assert service.tick(NOW).value == "not_due"
+    assert workflow.calls == 0
+    action = service.tick(retry_at)
+
+    retried = store.load()
+    assert action.value == "run"
+    assert workflow.calls == 1
+    assert retried.phase == "succeeded"
+    assert retried.automatic_retries_used == 1
+    assert retried.manual_retries_used == 0
+    assert retried.retry_group_id == "scheduled-run"
 
 
 def test_only_the_owning_user_can_request_a_retry_of_personal_tools(tmp_path: Path) -> None:
@@ -251,6 +292,9 @@ def test_only_the_owning_user_can_request_a_retry_of_personal_tools(tmp_path: Pa
         task_id="user-tools",
         interval_hours=24,
         lock_file=tmp_path / "locks" / "user-tools.lock",
+        retry_policy=TaskRetryPolicy(
+            automatic_attempts=2, delay_minutes=15, user_manual_attempts=1
+        ),
     )
 
     action = service.tick(NOW)
@@ -320,7 +364,7 @@ def test_service_records_a_run_summary_after_completion(tmp_path: Path) -> None:
     assert records[0].message == "Updates completed."
 
 
-def test_system_task_reads_only_its_own_response_file(tmp_path: Path) -> None:
+def test_system_task_ignores_user_response_requests(tmp_path: Path) -> None:
     policy = load_policy()
     user_home = tmp_path / "alice"
     user_home.mkdir()
@@ -353,5 +397,6 @@ def test_system_task_reads_only_its_own_response_file(tmp_path: Path) -> None:
 
     action = service.tick(NOW + timedelta(minutes=1))
 
-    assert action.value == "deferred"
-    assert state_store.load().phase == "deferred"
+    assert action.value == "waiting_for_response"
+    assert state_store.load().phase == "awaiting_response"
+    assert not task_request_path(user_home, "system").exists()

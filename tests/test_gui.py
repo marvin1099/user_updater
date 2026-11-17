@@ -14,6 +14,7 @@ from user_updater.history import RunHistoryStore, history_path_for_state
 from user_updater.policy import load_policy
 from user_updater.requests import task_request_path
 from user_updater.state import StateStore, UpdateState
+from user_updater.tool_preferences import UserToolPreferenceStore
 
 
 def _application() -> QApplication:
@@ -103,6 +104,11 @@ def test_admin_settings_dialog_builds_a_valid_policy_mapping(tmp_path: Path) -> 
     dialog.user_interval.setValue(12)
     dialog.allow_custom_tools.setChecked(False)
     dialog.tool_checks["flatpak"].setChecked(False)
+    dialog.system_automatic_retries.setValue(3)
+    dialog.system_retry_delay.setValue(20)
+    dialog.system_user_retries.setValue(2)
+    dialog.user_tools_automatic_retries.setValue(1)
+    dialog.user_tools_user_retries.setValue(3)
 
     mapping = dialog.policy_mapping()
 
@@ -110,6 +116,13 @@ def test_admin_settings_dialog_builds_a_valid_policy_mapping(tmp_path: Path) -> 
     assert mapping["updates"]["allow_custom_user_tools"] is False
     assert "flatpak" not in mapping["updates"]["user_tools"]
     assert mapping["schedule"]["user_tools_interval_hours"] == 12
+    assert mapping["retry"]["system"] == {
+        "automatic_attempts": 3,
+        "delay_minutes": 20,
+        "user_manual_attempts": 2,
+    }
+    assert mapping["retry"]["user_tools"]["automatic_attempts"] == 1
+    assert mapping["retry"]["user_tools"]["user_manual_attempts"] == 3
     dialog.deleteLater()
 
 
@@ -143,11 +156,13 @@ def test_system_window_keeps_system_and_user_responses_separate(tmp_path: Path) 
         system_request_file=task_request_path(home, "system"),
     )
 
+    assert window.system_panel.update_now_button.isHidden()
+    assert window.system_panel.defer_button.isHidden()
     window.system_panel.update_now_button.click()
     window.user_panel.defer_choice.setCurrentIndex(1)
     window.user_panel.defer_button.click()
 
-    assert '"run_id":"system-run"' in task_request_path(home, "system").read_text()
+    assert not task_request_path(home, "system").exists()
     assert '"run_id":"user-run"' in task_request_path(home, "user-tools").read_text()
     assert '"hours":4' in task_request_path(home, "user-tools").read_text()
     window.deleteLater()
@@ -162,7 +177,7 @@ def test_full_details_has_read_only_task_tabs_and_returns_after_completion(tmp_p
             phase="running",
             run_id="system-run",
             started_at=datetime.now().astimezone().isoformat(),
-            last_output=("system output",),
+            last_output=tuple(f"system line {index}" for index in range(250)),
         )
     )
     user_store.save(
@@ -180,7 +195,10 @@ def test_full_details_has_read_only_task_tabs_and_returns_after_completion(tmp_p
     assert window.tabs.count() == 3
     assert window.system_tab.terminal.isReadOnly()
     assert window.user_tab.terminal.isReadOnly()
-    assert "system output" not in window.system_tab.terminal.toPlainText()
+    system_output = window.system_tab.terminal.toPlainText().splitlines()
+    assert len(system_output) == 200
+    assert system_output[0] == "system line 50"
+    assert system_output[-1] == "system line 249"
     assert "user output" in window.user_tab.terminal.toPlainText()
 
     system_store.save(UpdateState(phase="succeeded", message="System complete."))
@@ -213,10 +231,12 @@ def test_full_details_shows_next_run_history_and_owner_retry_control(tmp_path: P
         user_store,
         system_enabled=False,
         user_request_file=request_path,
+        user_manual_retry_limit=1,
     )
 
     assert "Next scheduled:" in window.user_tab.next_run.text()
     assert not window.user_tab.retry_button.isHidden()
+    assert "1 left" in window.user_tab.retry_button.text()
     assert "User update failed." in window.history_view.toPlainText()
 
     window.user_tab.retry_button.click()
@@ -231,14 +251,51 @@ def test_system_retry_button_requests_an_admin_authorized_action(tmp_path: Path)
     _application()
     system_store = StateStore(tmp_path / "system.json")
     user_store = StateStore(tmp_path / "user.json")
-    system_store.save(UpdateState(phase="failed", run_id="failed-system-run"))
-    window = FullDetailsWindow(system_store, user_store, user_tools_enabled=False)
+    system_store.save(
+        UpdateState(
+            phase="failed",
+            run_id="failed-system-run",
+            manual_retries_used=1,
+        )
+    )
+    window = FullDetailsWindow(
+        system_store,
+        user_store,
+        user_tools_enabled=False,
+        system_manual_retry_limit=2,
+    )
     requested: list[bool] = []
     window.system_retry_requested.connect(lambda: requested.append(True))
 
     window.system_tab.retry_button.click()
 
     assert requested == [True]
+    assert "1 left" in window.system_tab.retry_button.text()
+    window.deleteLater()
+
+
+def test_users_can_toggle_only_admin_enabled_personal_tools(tmp_path: Path) -> None:
+    _application()
+    user_store = StateStore(tmp_path / "user.json")
+    preferences = UserToolPreferenceStore(
+        tmp_path / "config" / "tool_preferences.json",
+        owner_uid=os.getuid(),
+    )
+    window = FullDetailsWindow(
+        None,
+        user_store,
+        system_enabled=False,
+        admin_allowed_user_tools=("flatpak", "pipx"),
+        user_tool_preferences=preferences,
+    )
+
+    assert set(window.user_tab.tool_checkboxes) == {"flatpak", "pipx"}
+    assert all(check.isChecked() for check in window.user_tab.tool_checkboxes.values())
+    window.user_tab.tool_checkboxes["flatpak"].setChecked(False)
+    window.user_tab.save_tools_button.click()
+
+    assert preferences.load(("flatpak", "pipx")) == ("pipx",)
+    assert "saved" in window.user_tab.tool_preferences_status.text().lower()
     window.deleteLater()
 
 

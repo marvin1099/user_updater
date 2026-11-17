@@ -28,10 +28,13 @@ class _TaskPanel(QWidget):
         policy: Policy,
         request_file: Path,
         parent: QWidget | None = None,
+        *,
+        allow_user_response: bool = True,
     ) -> None:
         super().__init__(parent)
         self.title = title
         self.policy = policy
+        self.allow_user_response = allow_user_response
         self.request_file = Path(request_file)
         self._state = UpdateState()
         self._request_sent = False
@@ -75,9 +78,9 @@ class _TaskPanel(QWidget):
         self.setVisible(show_panel)
         response_open = state.phase == "awaiting_response"
         self.countdown.setVisible(response_open)
-        self.defer_choice.setVisible(response_open)
-        self.defer_button.setVisible(response_open)
-        self.update_now_button.setVisible(response_open)
+        self.defer_choice.setVisible(response_open and self.allow_user_response)
+        self.defer_button.setVisible(response_open and self.allow_user_response)
+        self.update_now_button.setVisible(response_open and self.allow_user_response)
         if response_open:
             remaining = _remaining_seconds(state.response_deadline)
             if remaining is None:
@@ -85,7 +88,7 @@ class _TaskPanel(QWidget):
             else:
                 minutes, seconds = divmod(remaining, 60)
                 self.countdown.setText(f"Automatic start in {minutes}:{seconds:02d}.")
-            allowed = (
+            allowed = self.allow_user_response and (
                 self.policy.interaction.allow_deferral
                 and state.deferrals_used < self.policy.interaction.max_deferrals_per_run
                 and bool(self.policy.interaction.deferral_options_hours)
@@ -101,12 +104,16 @@ class _TaskPanel(QWidget):
                 self.status.setText(f"{self.title}: response sent; waiting for the updater.")
 
     def _submit_defer(self) -> None:
+        if not self.allow_user_response:
+            return
         hours = self.defer_choice.currentData()
         if self._state.run_id is None or hours is None:
             return
         self._save(UserRequest(self._state.run_id, "defer", int(hours)))
 
     def _submit_start_now(self) -> None:
+        if not self.allow_user_response:
+            return
         if self._state.run_id is None:
             return
         self._save(UserRequest(self._state.run_id, "start_now"))
@@ -184,7 +191,13 @@ class UpdaterWindow(QWidget):
         self.system_panel = None
         if self.system_state_store is not None:
             system_path = system_request_file or Path(request_file).with_name("system-request.json")
-            self.system_panel = _TaskPanel("System update", self.policy, system_path, self)
+            self.system_panel = _TaskPanel(
+                "System update",
+                self.policy,
+                system_path,
+                self,
+                allow_user_response=False,
+            )
         self.user_panel = _TaskPanel("Your user tools", self.policy, request_file, self)
 
         self.full_button = QPushButton("Full details")

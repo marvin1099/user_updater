@@ -1,8 +1,8 @@
 # User Updater
 
-User Updater is a Python and Qt application for scheduled Linux updates. A machine-wide installation schedules system updates separately from each logged-in user's personal tools. The two jobs have independent schedules and response prompts, and run concurrently when both are due. A user-only installation updates only the current user's tools.
+User Updater is a Python and Qt application for scheduled Linux updates. A machine-wide installation schedules system updates separately from each logged-in user's personal tools. The jobs have independent schedules and run concurrently when both are due; users can respond to their personal-tool prompt, while system updates follow administrator settings. A user-only installation updates only the current user's tools.
 
-Before each scheduled update, the desktop client gives users a response window. A user may start immediately or request one of the reschedules allowed by administrator policy. If nobody responds, the update proceeds automatically. The compact frameless window can expand to read-only system/user output tabs and a recent-run history tab, with elapsed and next-run times. Failed tasks can be retried from the details view; system retries require administrator authorization. Closing either view never cancels a worker.
+Before a personal-tool update, the desktop client gives the user a response window. The user may start it immediately or request one of the administrator-allowed reschedules; no response means it proceeds automatically. System updates are informational to users and run on the administrator's schedule without user reschedule/start controls. The compact frameless window can expand to read-only system/user output tabs and a recent-run history tab, with elapsed and next-run times. Failed tasks can be retried from the details view within the configured limit; system retries require administrator authorization. Closing either view never cancels a worker.
 
 ## Requirements
 
@@ -63,16 +63,19 @@ Default behavior:
 - Schedule: Thursday and Sunday at 03:00 local time.
 - Response window: 5 minutes. No response means proceed.
 - Personal tool updates: independently due every 24 hours per user, with a 5-minute response window. Missed runs remain due and are caught up when that user next has a desktop session.
-- Reschedule choices: 1, 4, or 24 hours; at most two reschedules per scheduled run.
+- Personal-tool reschedule choices: 1, 4, or 24 hours; at most two reschedules per scheduled run.
+- Automatic retries: up to 2 additional attempts per scheduled run, 15 minutes apart, independently for system updates and personal tools.
+- User-requested retries: disabled by default for both task types. Administrators can allow 0–5 per scheduled run; system retry requests always go through polkit.
 - System updates run through `topgrade` under a short-lived, non-login builder account. By default, its passwordless sudo rule is limited to the detected native package-manager executable.
 - Active local graphical users can have their configured per-user tools updated separately, without administrator privileges. Their state is stored independently by UID.
+- The administrator's `updates.user_tools` list is the hard allow-list for personal tools. Users may opt out of individual allowed tools; all allowed tools start selected until a user saves preferences. Administrators can disable personal-tool updates entirely with `updates.run_user_tools: false`.
 - Built-in user tools are followed by executable custom hooks from `~/.config/user_updater/tools.d`. Hooks run as their owner, never as root; the administrator can disable hooks with `updates.allow_custom_user_tools: false`.
 
-Set `interaction.allow_deferral: false` to remove rescheduling while retaining the response window. `interaction.deferral_options_hours` and `interaction.max_deferrals_per_run` can further limit rescheduling. `security.builder_sudo_mode: unrestricted` grants the temporary builder unrestricted passwordless sudo for the duration of the run; the default is the restricted `package-manager` mode.
+Retry policy is configured independently under `retry.system` and `retry.user_tools`. Each section accepts `automatic_attempts` (0–5), `delay_minutes` (1–1440), and `user_manual_attempts` (0–5). Set `interaction.allow_deferral: false` to remove rescheduling while retaining the response window; it applies to personal-tool updates. Users cannot defer or start machine-wide system updates, which proceed according to administrator policy. `interaction.deferral_options_hours` and `interaction.max_deferrals_per_run` can further limit personal-tool rescheduling. `security.builder_sudo_mode: unrestricted` grants the temporary builder unrestricted passwordless sudo for the duration of the run; the default is the restricted `package-manager` mode.
 
 Unknown policy keys and invalid values are rejected. User-mode execution always disables system updates even if a local policy attempts to enable them.
 
-The minimal desktop view has separate controls for system and personal-tool updates. **Full details** opens System updates, User tools, and Run history tabs, with read-only output, elapsed time, and the next scheduled run. The owner may retry a failed personal-tool run; a failed system run offers retry only after a polkit authorization prompt.
+The minimal desktop view shows machine-wide system updates without controls. In **Full details**, users can request a system retry only when the administrator allows it, and that request requires polkit authorization. The details view opens System updates, User tools, and Run history tabs, with read-only output, elapsed time, and the next scheduled run. System output shows a read-only, bounded preview (up to 200 recent lines); full system logs remain root-only. Users can toggle their allowed personal tools in the User tools tab and may retry failed personal-tool runs only within the administrator's configured limit.
 
 ### Wayland window placement
 
@@ -102,9 +105,9 @@ The minimal desktop view has separate controls for system and personal-tool upda
 
 Uninstall the user integration with `user-updater uninstall --user`; add `--purge` to remove its local policy and state as well.
 
-Each task keeps the latest 20 metadata-only run summaries; output stays in the rotating log rather than being duplicated in history. Machine-wide logs at `/var/log/user-updater/updater.log` are root-only through the CLI, while user-only logs are at `~/.local/state/user_updater/updater.log`. Log files rotate through up to five 10 MiB backups. The application uses separate locks and state for system and per-user tasks, and cleans abandoned temporary builder accounts and sudoers entries before starting a later system update.
+Each task keeps the latest 20 metadata-only run summaries; output is not duplicated in history. Machine-wide logs at `/var/log/user-updater/updater.log` are root-only through the CLI, while the desktop client can read the bounded system-output preview from shared state. User-only logs are at `~/.local/state/user_updater/updater.log`. Log files rotate through up to five 10 MiB backups. The application uses separate locks and state for system and per-user tasks, and cleans abandoned temporary builder accounts and sudoers entries before starting a later system update.
 
-If a worker is interrupted while its state says `running`, the next scheduler tick records the run as failed, preserves its run ID and start time, and advances to the next normal scheduled occurrence. It does not immediately replay an update that may have partially changed the system. System output stays in the root-only log; personal-tool output remains separately inspectable by its owner. Invalid persisted state is rejected rather than interpreted as permission to run an update. See [reliability testing](docs/reliability-testing.md) for the VM checklist.
+If a worker is interrupted while its state says `running`, the next scheduler tick records the run as failed, preserves its run ID and start time, and advances to the next normal scheduled occurrence. It does not automatically replay an interrupted update that may have partially changed the system. System output is written to the root-only log with only the bounded preview shared with users; personal-tool output remains inspectable by its owner. Invalid persisted state is rejected rather than interpreted as permission to run an update. See [reliability testing](docs/reliability-testing.md) for the VM checklist.
 
 ## Tests and lint
 

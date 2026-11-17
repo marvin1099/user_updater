@@ -1,5 +1,5 @@
 # Administrator policy. The system installer copies this to
-# /etc/user_updater/project.yaml. Users may request only the deferrals allowed here.
+# /etc/user_updater/project.yaml. User requests are limited by this policy.
 version: 1
 
 schedule:
@@ -20,6 +20,16 @@ updates:
   run_user_tools: true
   user_tools: [flatpak, pipx, pip, npm, cargo, gem]
   allow_custom_user_tools: true
+
+retry:
+  system:
+    automatic_attempts: 2
+    delay_minutes: 15
+    user_manual_attempts: 0
+  user_tools:
+    automatic_attempts: 2
+    delay_minutes: 15
+    user_manual_attempts: 0
 
 security:
   builder_sudo_mode: package-manager
