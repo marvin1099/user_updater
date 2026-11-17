@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
@@ -38,19 +39,28 @@ def is_kde_session() -> bool:
     )
 
 
-def _kdotool_move_arguments(pid: int, title: str, x: int, y: int) -> list[str]:
-    """Build a PID-and-title-scoped move command; never target another app's window."""
+def _kdotool_work_area_move_arguments(pid: int, title: str, margin: int) -> list[str]:
+    """Build a KWin move script scoped to one updater window and its work area."""
+    script = (
+        "var matches = workspace.windowList().filter(function(window) { "
+        f"return window.pid === {pid} && window.caption === {json.dumps(title)}; "
+        "}); "
+        'if (matches.length !== 1) { '
+        'output_error("Expected exactly one updater window, found " + matches.length); '
+        "} else { "
+        "var window = matches[0]; "
+        "var area = workspace.clientArea(KWin.WorkArea, window); "
+        "var geometry = Object.assign({}, window.frameGeometry); "
+        f"geometry.x = area.x + area.width - window.width - {margin}; "
+        f"geometry.y = area.y + area.height - window.height - {margin}; "
+        "window.frameGeometry = geometry; "
+        "}"
+    )
     return [
         "--quiet",
-        "search",
-        "--all",
-        "--pid",
-        str(pid),
-        "--title",
-        title,
-        "windowmove",
-        str(x),
-        str(y),
+        "kwinscript",
+        "--inline",
+        script,
     ]
 
 
@@ -79,6 +89,12 @@ class WindowPlacement:
             # LayerShellQt anchors the mapped surface itself, including after output changes.
             return
 
+        if self._kdotool:
+            # Qt's availableGeometry can include Plasma panels on Wayland. Let KWin
+            # calculate its own work area after the window has been registered.
+            QTimer.singleShot(120, self._move_with_kdotool)
+            return
+
         screen = self.window.screen() or QApplication.primaryScreen()
         if screen is None:
             return
@@ -86,11 +102,8 @@ class WindowPlacement:
         x = available.x() + available.width() - self.window.width() - self.margin
         y = available.y() + available.height() - self.window.height() - self.margin
 
-        # Retain the ordinary xdg-shell/X11 request as a fallback. On KDE Wayland,
-        # kdotool applies the compositor-side move after KWin has registered the window.
+        # Retain the ordinary xdg-shell/X11 request as a fallback.
         self.window.move(x, y)
-        if self._kdotool:
-            QTimer.singleShot(120, lambda: self._move_with_kdotool(x, y))
 
     def _configure_layer_shell(self) -> bool:
         if not is_wayland_session() or is_kde_session():
@@ -130,13 +143,15 @@ class WindowPlacement:
             logger.debug("Could not configure wlr-layer-shell for updater window", exc_info=True)
             return False
 
-    def _move_with_kdotool(self, x: int, y: int) -> None:
+    def _move_with_kdotool(self) -> None:
         if not self._kdotool:
             return
         application = QApplication.instance()
         process = QProcess(application)
         process.setProgram(str(Path(self._kdotool)))
-        process.setArguments(_kdotool_move_arguments(os.getpid(), self.title, x, y))
+        process.setArguments(
+            _kdotool_work_area_move_arguments(os.getpid(), self.title, self.margin)
+        )
         _ACTIVE_PROCESSES.add(process)
 
         def release(*_args: object) -> None:

@@ -5,7 +5,6 @@
 
 #include <QGuiApplication>
 #include <QMargins>
-#include <QSize>
 #include <QWidget>
 
 #include <cstdint>
@@ -36,6 +35,7 @@ PyObject *configure_window(PyObject *, PyObject *args)
 
     auto *widget = reinterpret_cast<QWidget *>(static_cast<std::uintptr_t>(address));
     widget->winId();
+    widget->resize(width, height);
     auto *window = widget->windowHandle();
     if (!window || QGuiApplication::platformName() != QStringLiteral("wayland")) {
         Py_RETURN_FALSE;
@@ -51,13 +51,13 @@ PyObject *configure_window(PyObject *, PyObject *args)
     anchors |= LayerShellQt::Window::AnchorBottom;
     anchors |= LayerShellQt::Window::AnchorRight;
     layerWindow->setAnchors(anchors);
-    layerWindow->setMargins(QMargins(0, margin, margin, 0));
+    layerWindow->setMargins(QMargins(0, 0, margin, margin));
     layerWindow->setExclusiveZone(0);
-    layerWindow->setDesiredSize(QSize(width, height));
     layerWindow->setKeyboardInteractivity(
-        LayerShellQt::Window::KeyboardInteractivityOnDemand
+        activateOnShow != 0
+            ? LayerShellQt::Window::KeyboardInteractivityExclusive
+            : LayerShellQt::Window::KeyboardInteractivityOnDemand
     );
-    layerWindow->setActivateOnShow(activateOnShow != 0);
     Py_RETURN_TRUE;
 }
 

@@ -394,3 +394,30 @@ def test_system_status_does_not_print_machine_update_output_for_users(
 
     assert result == 0
     assert "secret package output" not in capsys.readouterr().out
+
+
+def test_system_status_does_not_treat_user_history_as_state(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
+    paths = AppPaths(
+        policy=tmp_path / "project.yaml",
+        state=tmp_path / "state.json",
+        user_state_dir=tmp_path / "users",
+        builder_home=tmp_path / "builders",
+        sudoers=tmp_path / "sudoers",
+        request=tmp_path / "request.json",
+        log_file=tmp_path / "updater.log",
+    )
+    user_state_path = paths.user_state_dir / f"{os.getuid()}.json"
+    state = UpdateState(phase="succeeded", message="Personal tools completed.")
+    StateStore(user_state_path).save(state)
+    RunHistoryStore(history_path_for_state(user_state_path)).append("user-tools", state)
+    monkeypatch.setattr(cli, "system_paths", lambda: paths)
+
+    result = cli.main(["status", "--system"])
+
+    output = capsys.readouterr().out
+    assert result == 0
+    assert output.count("user-tool updates:") == 1
+    assert "user-tool updates: succeeded" in output
+    assert "unknown state field" not in output

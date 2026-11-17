@@ -17,9 +17,9 @@ The service tests model a process restart by persisting a `running` state, const
 
 ## KDE Wayland GUI smoke test
 
-Use a private KDE test session where possible, rather than opening or moving windows on a user's active desktop. Launch the safe demo (`user-updater demo`), wait for **User Updater Status**, and verify the window appears at bottom right. The KDE path should use the PID-and-title-scoped `kdotool` call; verify moving the demo window does not affect other applications. The demo only writes temporary simulated state and never invokes package tools.
+Use a private KDE test session where possible, rather than opening or moving windows on a user's active desktop. Launch the safe demo (`user-updater demo`), wait for **User Updater Status**, and verify the window appears at bottom right inside KWin's `WorkArea`. The KDE path uses a PID-and-title-scoped KWin script through `kdotool`; verify moving the demo window does not affect other applications. The demo only writes temporary simulated state and never invokes package tools.
 
-The LayerShellQt bridge requires a separate compositor advertising `wlr-layer-shell`; KDE is intentionally tested through `kdotool`. On a wlroots desktop, confirm bottom/right anchoring, keyboard focus when requested, and normal Qt fallback when the bridge is missing or built against a mismatched Qt minor version. Do not treat a successful build or a simulated `kdotool --dry-run` as proof of live placement.
+The LayerShellQt bridge requires a separate compositor advertising `wlr-layer-shell`; KDE is intentionally tested through `kdotool`. On a wlroots desktop, confirm bottom/right anchoring, 20px bottom/right margins, keyboard focus when requested, and normal Qt fallback when the bridge is missing or built against a mismatched Qt minor version. Do not treat a successful build or a simulated `kdotool --dry-run` as proof of live placement; inspect the compositor result or the live layer-shell protocol exchange.
 
 ## Disposable VM installation checklist
 

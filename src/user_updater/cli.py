@@ -526,6 +526,8 @@ def _status(system_mode: bool) -> int:
         print("\n".join(state.last_output[-10:]))
     if system_mode:
         for user_state_path in sorted(paths.user_state_dir.glob("*.json")):
+            if not user_state_path.stem.isdecimal():
+                continue
             try:
                 username = pwd.getpwuid(int(user_state_path.stem)).pw_name
             except (ValueError, KeyError):

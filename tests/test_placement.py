@@ -6,7 +6,7 @@ from PySide6.QtWidgets import QApplication, QWidget
 
 from user_updater.gui.placement import (
     WindowPlacement,
-    _kdotool_move_arguments,
+    _kdotool_work_area_move_arguments,
     is_kde_session,
 )
 
@@ -16,19 +16,16 @@ def _application() -> QApplication:
     return application or QApplication([])
 
 
-def test_kdotool_move_is_scoped_to_pid_and_window_title() -> None:
-    assert _kdotool_move_arguments(1234, "User Updater Status", 700, 900) == [
-        "--quiet",
-        "search",
-        "--all",
-        "--pid",
-        "1234",
-        "--title",
-        "User Updater Status",
-        "windowmove",
-        "700",
-        "900",
-    ]
+def test_kdotool_move_uses_kde_work_area_and_scopes_window() -> None:
+    arguments = _kdotool_work_area_move_arguments(1234, 'User "Updater" Status', 20)
+
+    assert arguments[:3] == ["--quiet", "kwinscript", "--inline"]
+    assert 'window.pid === 1234' in arguments[3]
+    assert 'window.caption === "User \\"Updater\\" Status"' in arguments[3]
+    assert "workspace.clientArea(KWin.WorkArea, window)" in arguments[3]
+    assert "geometry.x = area.x + area.width - window.width - 20" in arguments[3]
+    assert "geometry.y = area.y + area.height - window.height - 20" in arguments[3]
+    assert "window.frameGeometry = geometry" in arguments[3]
 
 
 def test_kde_detection_uses_desktop_environment_names(monkeypatch) -> None:
