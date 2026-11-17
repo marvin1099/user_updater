@@ -1,4 +1,5 @@
 import os
+import stat
 from pathlib import Path
 
 from user_updater.accounts import BuilderAccount
@@ -35,8 +36,15 @@ def test_topgrade_runs_as_the_temporary_builder_and_is_cleaned(tmp_path: Path) -
     config.write_text("version: 1\nupdates:\n  run_user_tools: false\n", encoding="utf-8")
     manager = FakeBuilderManager(tmp_path / "builders")
     calls: list[tuple[list[str], dict[str, object]]] = []
+    topgrade_config = manager.account.home / ".config" / "topgrade.toml"
+    assert not topgrade_config.exists()
 
     def runner(command: list[str], **kwargs: object) -> CommandResult:
+        assert topgrade_config.read_text(encoding="utf-8") == "[misc]\nassume_yes = true\n"
+        config_stat = topgrade_config.stat()
+        assert stat.S_IMODE(config_stat.st_mode) == 0o600
+        assert config_stat.st_uid == manager.account.uid
+        assert config_stat.st_gid == manager.account.gid
         calls.append((command, kwargs))
         kwargs["on_output"]("Packages updated")
         return CommandResult(0, 3.0, False, ("Packages updated",))
@@ -57,6 +65,7 @@ def test_topgrade_runs_as_the_temporary_builder_and_is_cleaned(tmp_path: Path) -
     assert calls[0][1]["user_id"] == manager.account.uid
     assert calls[0][1]["group_id"] == manager.account.gid
     assert calls[0][1]["env"]["HOME"] == str(manager.account.home)
+    assert calls[0][1]["env"]["XDG_CONFIG_HOME"] == str(topgrade_config.parent)
     assert manager.removed == [manager.account]
     assert "Packages updated" in output
 

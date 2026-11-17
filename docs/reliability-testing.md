@@ -13,7 +13,7 @@ QT_QPA_PLATFORM=offscreen uv run pytest -q
 uv build
 ```
 
-The service tests model a process restart by persisting a `running` state, constructing a fresh service, and ticking it again. Recovery must mark the old run failed, preserve its identity, avoid invoking the workflow again, and wait until the next normal due time. System state exposes only a bounded read-only output preview; complete machine logs remain root-only. A normal failed run may be retried automatically according to the separate system/personal-tool policy, but an interrupted run is never automatically replayed because a package update may have applied only part of its changes.
+The service tests model a process restart by persisting a `running` state, constructing a fresh service, and ticking it again. Recovery must mark the old run failed, preserve its identity, avoid invoking the workflow again, and wait until the next normal due time. The Topgrade workflow test also verifies that a missing builder config is created with `[misc] assume_yes = true` before Topgrade starts. System state exposes only a bounded read-only output preview; complete machine logs remain root-only. A normal failed run may be retried automatically according to the separate system/personal-tool policy, but an interrupted run is never automatically replayed because a package update may have applied only part of its changes.
 
 ## KDE Wayland GUI smoke test
 

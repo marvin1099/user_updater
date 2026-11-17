@@ -135,6 +135,7 @@ class UpdateWorkflow:
 
     @staticmethod
     def _write_topgrade_config(account: BuilderAccount) -> None:
+        # Seed the temporary home before Topgrade's first-run config prompt can block.
         config_directory = account.home / ".config"
         config_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         config_file = config_directory / "topgrade.toml"
