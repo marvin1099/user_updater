@@ -100,10 +100,32 @@ def test_temporary_builder_sudoers_allows_garuda_update_wrapper(tmp_path: Path) 
 
     account = manager.create()
 
-    assert backend.sudoers[account.sudoers_path] == (
+    sudoers = backend.sudoers[account.sudoers_path]
+    assert sudoers.splitlines() == [
+        'Defaults!/usr/bin/garuda-update env_check += "SKIP_MIRRORLIST=1 UPDATE_AUR=1"',
         f"{account.name} ALL=(root) NOPASSWD: /usr/bin/garuda-update, "
-        "/usr/bin/garuda-update *, /usr/bin/flatpak, /usr/bin/flatpak *\n"
+        "/usr/bin/garuda-update *, /usr/bin/flatpak, /usr/bin/flatpak *",
+    ]
+    assert "SETENV" not in sudoers
+
+
+def test_non_garuda_package_manager_does_not_get_environment_overrides(
+    tmp_path: Path,
+) -> None:
+    backend = FakeAccountBackend()
+    manager = BuilderAccountManager(
+        home_root=tmp_path / "builders",
+        sudoers_root=tmp_path / "sudoers",
+        policy=load_policy(),
+        backend=backend,
     )
+
+    account = manager.create()
+    sudoers = backend.sudoers[account.sudoers_path]
+
+    assert "Defaults!" not in sudoers
+    assert "SKIP_MIRRORLIST" not in sudoers
+    assert "SETENV" not in sudoers
 
 
 def test_stale_builder_and_orphan_sudoers_are_removed(tmp_path: Path) -> None:
