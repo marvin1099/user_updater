@@ -10,6 +10,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
+from xml.sax.saxutils import escape
 
 from .policy import default_policy_text, load_policy
 
@@ -37,6 +38,13 @@ class InstallPaths:
     autostart_dir: Path = Path("/etc/xdg/autostart")
     log_file: Path = Path("/var/log/user-updater/updater.log")
     executable: Path = Path("/usr/local/bin/user-updater")
+    polkit_action_file: Path = Path(
+        "/usr/share/polkit-1/actions/org.userupdater.policy"
+    )
+
+    @property
+    def admin_helper(self) -> Path:
+        return self.executable.with_name("user-updater-admin")
 
 
 @dataclass(frozen=True)
@@ -103,6 +111,11 @@ class SystemInstaller:
             _desktop_entry(paths.executable, "gui", "--system"),
             0o644,
         )
+        _atomic_write(
+            paths.polkit_action_file,
+            _admin_polkit_action(paths.admin_helper),
+            0o644,
+        )
         self.systemd.run(["daemon-reload"])
         self.systemd.run(["enable", "--now", "user-updater.timer"])
 
@@ -113,6 +126,7 @@ class SystemInstaller:
         (self.paths.unit_dir / "user-updater.service").unlink(missing_ok=True)
         (self.paths.unit_dir / "user-updater.timer").unlink(missing_ok=True)
         (self.paths.autostart_dir / "user-updater.desktop").unlink(missing_ok=True)
+        self.paths.polkit_action_file.unlink(missing_ok=True)
         self.systemd.run(["daemon-reload"], check=False)
         if purge:
             shutil.rmtree(self.paths.state_dir, ignore_errors=True)
@@ -229,6 +243,28 @@ Exec={binary} {command} {mode}
 Terminal=false
 NoDisplay=true
 X-GNOME-Autostart-enabled=true
+"""
+
+
+def _admin_polkit_action(helper: Path) -> str:
+    """Authorize only the dedicated admin helper and cache its admin grant briefly."""
+    helper_path = escape(str(helper))
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+  <vendor>User Updater</vendor>
+  <action id="org.userupdater.admin">
+    <description>Manage User Updater system updates</description>
+    <message>Authentication is required to manage system updates</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">{helper_path}</annotate>
+  </action>
+</policyconfig>
 """
 
 

@@ -17,6 +17,7 @@ dependencies = [
 
 [project.scripts]
 user-updater = "user_updater.cli:main"
+user-updater-admin = "user_updater.admin_helper:main"
 
 [dependency-groups]
 dev = [

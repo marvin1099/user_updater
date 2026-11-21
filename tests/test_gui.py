@@ -232,9 +232,13 @@ def test_admin_run_now_button_starts_the_authorized_system_command(monkeypatch) 
     dialog = AdminSettingsDialog(load_policy())
     commands: list[tuple[str, list[str]]] = []
     monkeypatch.setattr(
-        admin_gui, "_trusted_system_executable", lambda: "/usr/local/bin/user-updater"
+        admin_gui, "_trusted_admin_helper", lambda: "/usr/local/bin/user-updater-admin"
     )
-    monkeypatch.setattr(admin_gui.shutil, "which", lambda _name: "/usr/bin/pkexec")
+    monkeypatch.setattr(
+        admin_gui.shutil,
+        "which",
+        lambda name: "/usr/bin/pkexec" if name == "pkexec" else None,
+    )
     monkeypatch.setattr(
         admin_gui.QProcess,
         "startDetached",
@@ -245,9 +249,52 @@ def test_admin_run_now_button_starts_the_authorized_system_command(monkeypatch) 
     dialog.run_system_now_button.click()
 
     assert commands == [
-        ("/usr/bin/pkexec", ["/usr/local/bin/user-updater", "run-now", "--system"])
+        ("/usr/bin/pkexec", ["/usr/local/bin/user-updater-admin", "run-now"])
     ]
     dialog.deleteLater()
+
+
+def test_admin_settings_and_run_action_share_the_cached_polkit_helper(
+    monkeypatch, tmp_path: Path
+) -> None:
+    _application()
+    helper = "/usr/local/bin/user-updater-admin"
+    commands: list[list[str]] = []
+    saved: list[object] = []
+    policy_file = tmp_path / "project.yaml"
+    policy_file.write_text("version: 1\n", encoding="utf-8")
+
+    class AcceptedDialog:
+        def __init__(self, _policy, _parent) -> None:
+            pass
+
+        def exec(self):
+            return admin_gui.QDialog.DialogCode.Accepted
+
+        def policy_mapping(self):
+            return {"version": 1}
+
+    monkeypatch.setattr(admin_gui.os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(admin_gui, "_trusted_admin_helper", lambda: helper)
+    monkeypatch.setattr(
+        admin_gui.shutil,
+        "which",
+        lambda name: "/usr/bin/pkexec" if name == "pkexec" else None,
+    )
+    monkeypatch.setattr(admin_gui, "AdminSettingsDialog", AcceptedDialog)
+
+    def fake_run(arguments, **_kwargs):
+        commands.append(arguments)
+        return type("Completed", (), {"returncode": 0, "stderr": ""})()
+
+    monkeypatch.setattr(admin_gui.subprocess, "run", fake_run)
+    admin_gui.open_admin_settings(None, policy_file, saved.append)
+
+    assert commands == [
+        ["/usr/bin/pkexec", helper, "authorize-settings"],
+        ["/usr/bin/pkexec", helper, "write-policy"],
+    ]
+    assert len(saved) == 1
 
 
 def test_system_window_keeps_system_and_user_responses_separate(tmp_path: Path) -> None:

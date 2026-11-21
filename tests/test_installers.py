@@ -1,4 +1,5 @@
 from pathlib import Path
+from xml.etree import ElementTree
 
 from user_updater.installer import InstallPaths, SystemInstaller, UserInstaller, UserInstallPaths
 from user_updater.policy import load_policy
@@ -20,6 +21,7 @@ def test_system_autostart_applies_to_users_added_after_install(tmp_path: Path) -
         autostart_dir=tmp_path / "etc" / "xdg" / "autostart",
         log_file=tmp_path / "log" / "updater.log",
         executable=Path("/usr/local/bin/user-updater"),
+        polkit_action_file=tmp_path / "polkit" / "org.userupdater.policy",
     )
     SystemInstaller(paths, systemd=FakeSystemd()).install()
 
@@ -43,6 +45,7 @@ def test_system_install_creates_admin_policy_service_timer_and_global_autostart(
         autostart_dir=tmp_path / "xdg" / "autostart",
         log_file=tmp_path / "log" / "updater.log",
         executable=Path("/usr/local/bin/user-updater"),
+        polkit_action_file=tmp_path / "polkit" / "org.userupdater.policy",
     )
     systemd = FakeSystemd()
     installer = SystemInstaller(paths, systemd=systemd)
@@ -52,10 +55,18 @@ def test_system_install_creates_admin_policy_service_timer_and_global_autostart(
     service = (paths.unit_dir / "user-updater.service").read_text(encoding="utf-8")
     timer = (paths.unit_dir / "user-updater.timer").read_text(encoding="utf-8")
     autostart = (paths.autostart_dir / "user-updater.desktop").read_text(encoding="utf-8")
+    polkit_action = paths.polkit_action_file.read_text(encoding="utf-8")
+    ElementTree.fromstring(polkit_action)
     policy = load_policy(paths.policy_file)
     assert "ExecStart=/usr/local/bin/user-updater tick --system" in service
     assert "OnUnitActiveSec=1min" in timer
     assert "Exec=/usr/local/bin/user-updater gui --system" in autostart
+    assert (
+        '<annotate key="org.freedesktop.policykit.exec.path">'
+        "/usr/local/bin/user-updater-admin</annotate>"
+    ) in polkit_action
+    assert "<allow_active>auth_admin_keep</allow_active>" in polkit_action
+    assert "<allow_any>no</allow_any>" in polkit_action
     assert policy.updates.run_system is True
     assert (paths.state_dir / "users").is_dir()
     assert (paths.state_dir / "locks").is_dir()
@@ -74,6 +85,7 @@ def test_system_reinstall_preserves_admin_policy_and_uninstall_preserves_data(
         autostart_dir=tmp_path / "autostart",
         log_file=tmp_path / "log" / "updater.log",
         executable=Path("/usr/local/bin/user-updater"),
+        polkit_action_file=tmp_path / "polkit" / "org.userupdater.policy",
     )
     systemd = FakeSystemd()
     installer = SystemInstaller(paths, systemd=systemd)
@@ -91,6 +103,7 @@ def test_system_reinstall_preserves_admin_policy_and_uninstall_preserves_data(
     assert (paths.state_dir / "keep.log").exists()
     assert not (paths.unit_dir / "user-updater.service").exists()
     assert not (paths.autostart_dir / "user-updater.desktop").exists()
+    assert not paths.polkit_action_file.exists()
 
 
 def test_user_install_defaults_to_user_tools_only(tmp_path: Path) -> None:

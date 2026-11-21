@@ -260,13 +260,14 @@ def open_admin_settings(
 ) -> None:
     """Authenticate before showing settings, then save through the narrow root helper."""
     try:
-        executable = _trusted_system_executable()
         pkexec = shutil.which("pkexec")
+        helper: str | None = None
         if os.geteuid() != 0:
             if pkexec is None:
                 raise RuntimeError("pkexec is required to open administrator settings")
+            helper = _trusted_admin_helper()
             authentication = subprocess.run(
-                [pkexec, executable, "admin-auth-check"],
+                [pkexec, helper, "authorize-settings"],
                 stdin=subprocess.DEVNULL,
                 capture_output=True,
                 text=True,
@@ -294,9 +295,9 @@ def open_admin_settings(
             on_saved(saved)
             return
 
-        assert pkexec is not None
+        assert pkexec is not None and helper is not None
         result = subprocess.run(
-            [pkexec, executable, "admin-policy-write"],
+            [pkexec, helper, "write-policy"],
             input=json.dumps(mapping),
             capture_output=True,
             text=True,
@@ -356,9 +357,9 @@ def start_system_retry(parent: QWidget) -> None:
 
 
 def start_system_update_now(parent: QWidget) -> None:
-    """Start a fresh machine-wide update after polkit authorization."""
+    """Start a fresh machine-wide update under the settings polkit authorization."""
     try:
-        executable = _trusted_system_executable()
+        helper = _trusted_admin_helper()
         pkexec = shutil.which("pkexec")
         if pkexec is None:
             raise RuntimeError("pkexec is required to start machine-wide updates")
@@ -366,7 +367,7 @@ def start_system_update_now(parent: QWidget) -> None:
         QMessageBox.warning(parent, "System updates", str(exc))
         return
 
-    started, _pid = QProcess.startDetached(pkexec, [executable, "run-now", "--system"])
+    started, _pid = QProcess.startDetached(pkexec, [helper, "run-now"])
     if not started:
         QMessageBox.warning(parent, "System updates", "Could not start pkexec.")
         return
@@ -400,3 +401,22 @@ def _trusted_system_executable() -> str:
                     "administrator settings require a root-owned, non-writable system installation"
                 )
     return str(candidate)
+
+
+def _trusted_admin_helper() -> str:
+    """Resolve the dedicated root-owned helper covered by the app's polkit action."""
+    located = shutil.which("user-updater-admin")
+    if located is None:
+        raise RuntimeError("user-updater-admin is required for administrator actions")
+    executable_path = Path(located).absolute()
+    candidate = executable_path.resolve(strict=True)
+    installed_module = Path(__file__).resolve(strict=True)
+    for installed_file in (candidate, installed_module):
+        for path in (installed_file, *installed_file.parents):
+            metadata = path.stat()
+            if metadata.st_uid != 0 or metadata.st_mode & 0o022:
+                raise RuntimeError(
+                    "administrator actions require a root-owned, non-writable system installation"
+                )
+    # Preserve the installed entry-point path: polkit matches the path passed to pkexec.
+    return str(executable_path)

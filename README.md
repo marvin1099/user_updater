@@ -28,7 +28,7 @@ sudo env \
 sudo user-updater install --system
 ```
 
-The install creates a persistent systemd timer and service, an administrator policy at `/etc/user_updater/project.yaml`, shared state under `/var/lib/user_updater`, rotating logs under `/var/log/user-updater`, and a system-wide XDG autostart entry in `/etc/xdg/autostart`. That global entry is picked up at graphical login by existing users and users added later; adding a user does not require reinstalling the updater or copying a per-user autostart file. It preserves an existing policy on reinstall. The desktop client's **Admin settings** action opens a polkit authentication prompt before showing settings; only the narrow policy-writing command runs with administrator privileges.
+The install creates a persistent systemd timer and service, an administrator policy at `/etc/user_updater/project.yaml`, shared state under `/var/lib/user_updater`, rotating logs under `/var/log/user-updater`, and a system-wide XDG autostart entry in `/etc/xdg/autostart`. That global entry is picked up at graphical login by existing users and users added later; adding a user does not require reinstalling the updater or copying a per-user autostart file. It preserves an existing policy on reinstall. **Admin settings** first requires polkit authentication. Saving settings and starting a system update use the same narrow, root-owned helper, so polkit can reuse that authorization instead of prompting again while its temporary authorization remains valid.
 
 System mode requires a root-owned, non-group/world-writable Python installation. This avoids running privileged update code from a user-writable checkout. Do not install this mode from untrusted source.
 
@@ -91,7 +91,7 @@ The minimal desktop view shows machine-wide system updates without controls. In 
 | Command | Purpose |
 | --- | --- |
 | `user-updater status --system` | Show machine-wide update state |
-| `user-updater run-now --system` | Start machine-wide system updates immediately after polkit authorization |
+| `user-updater run-now --system` | Root-only command to start machine-wide system updates immediately; the GUI uses its dedicated polkit helper |
 | `user-updater retry --system` | Retry a failed machine-wide run after polkit authorization |
 | `user-updater history --system` | Show recent system and per-user run summaries |
 | `user-updater logs --system` | Print machine-wide logs (root only); add `--output FILE` to export |
