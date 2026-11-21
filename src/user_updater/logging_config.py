@@ -33,14 +33,18 @@ class _ModeRotatingFileHandler(RotatingFileHandler):
 def configure_logging(log_file: Path, private: bool = False) -> logging.Logger:
     """Configure journal output plus a bounded local audit/update log."""
     log_file = Path(log_file)
-    mode = 0o600 if private else 0o640
-    directory_mode = 0o700 if private else 0o750
+    mode = 0o600 if private else 0o644
+    directory_mode = 0o700 if private else 0o755
     log_file.parent.mkdir(mode=directory_mode, parents=True, exist_ok=True)
     if log_file.parent.is_symlink() or not log_file.parent.is_dir():
         raise OSError(f"log directory must be a real directory: {log_file.parent}")
     if log_file.is_symlink():
         raise OSError(f"refusing to write through a symbolic-link log file: {log_file}")
     log_file.parent.chmod(directory_mode)
+    for index in range(1, _BACKUP_COUNT + 1):
+        backup = log_file.with_name(f"{log_file.name}.{index}")
+        if backup.is_file() and not backup.is_symlink():
+            backup.chmod(mode)
 
     logger = logging.getLogger(_LOGGER_NAME)
     logger.setLevel(logging.INFO)

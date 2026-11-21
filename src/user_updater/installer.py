@@ -81,8 +81,8 @@ class SystemInstaller:
         (paths.state_dir / "users").chmod(0o755)
         (paths.state_dir / "locks").mkdir(mode=0o700, exist_ok=True)
         (paths.state_dir / "locks").chmod(0o700)
-        paths.log_file.parent.mkdir(mode=0o750, parents=True, exist_ok=True)
-        paths.log_file.parent.chmod(0o750)
+        paths.log_file.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+        paths.log_file.parent.chmod(0o755)
         if not paths.policy_file.exists():
             _atomic_write(paths.policy_file, default_policy_text(), 0o644)
         policy = load_policy(paths.policy_file)

@@ -350,9 +350,10 @@ class BuilderAccountManager:
         allowed_commands = ", ".join(command_specs)
         environment_policy = ""
         if manager == "/usr/bin/garuda-update":
-            # Keep Garuda's mirrorlist override command-scoped and value-scoped;
-            # SETENV would permit arbitrary environment overrides.
+            # Allow only the exact flags Topgrade/Garuda need through its nested
+            # sudo call; SETENV would permit arbitrary environment overrides.
             environment_policy = (
                 'Defaults!/usr/bin/garuda-update env_check += "SKIP_MIRRORLIST=1"\n'
+                'Defaults!/usr/bin/garuda-update env_check += "UPDATE_AUR=1"\n'
             )
         return environment_policy + f"{name} ALL=(root) NOPASSWD: {allowed_commands}\n"
