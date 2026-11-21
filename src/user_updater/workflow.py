@@ -154,7 +154,15 @@ class UpdateWorkflow:
         config_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         config_file = config_directory / "topgrade.toml"
         config_file.write_text(
-            "[misc]\nassume_yes = true\n\n[flatpak]\nuse_sudo = true\n", encoding="utf-8"
+            "[misc]\n"
+            "assume_yes = true\n\n"
+            "[linux]\n"
+            # Garuda's wrapper re-enters itself through sudo and drops the
+            # PACMAN_NOCONFIRM environment flag Topgrade otherwise supplies.
+            'garuda_update_arguments = "--noconfirm"\n\n'
+            "[flatpak]\n"
+            "use_sudo = true\n",
+            encoding="utf-8",
         )
         os.chmod(config_file, 0o600)
         os.chown(config_directory, account.uid, account.gid)

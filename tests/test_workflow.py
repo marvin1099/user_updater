@@ -41,7 +41,12 @@ def test_topgrade_runs_as_the_temporary_builder_and_is_cleaned(tmp_path: Path) -
 
     def runner(command: list[str], **kwargs: object) -> CommandResult:
         assert topgrade_config.read_text(encoding="utf-8") == (
-            "[misc]\nassume_yes = true\n\n[flatpak]\nuse_sudo = true\n"
+            "[misc]\n"
+            "assume_yes = true\n\n"
+            "[linux]\n"
+            'garuda_update_arguments = "--noconfirm"\n\n'
+            "[flatpak]\n"
+            "use_sudo = true\n"
         )
         config_stat = topgrade_config.stat()
         assert stat.S_IMODE(config_stat.st_mode) == 0o600
