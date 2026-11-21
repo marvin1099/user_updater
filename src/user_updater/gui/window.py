@@ -20,6 +20,11 @@ from ..requests import UserRequest, save_request
 from ..state import StateError, StateStore, UpdateState
 from .placement import WindowPlacement
 
+_DISMISSIBLE_PHASES = frozenset(
+    {"awaiting_response", "running", "deferred", "succeeded", "failed"}
+)
+_TERMINAL_PHASES = frozenset({"succeeded", "failed"})
+
 
 class _TaskPanel(QWidget):
     def __init__(
@@ -149,6 +154,7 @@ class UpdaterWindow(QWidget):
         self._phase = "idle"
         self._full_mode = False
         self._dismissed_runs: set[tuple[str, str | None]] = set()
+        self._status_error_dismissed = False
         self.setWindowTitle("User Updater Status")
         self._build_ui(request_file, system_request_file, admin_enabled)
         self._placement = WindowPlacement(self, title=self.windowTitle())
@@ -248,6 +254,7 @@ class UpdaterWindow(QWidget):
     def show_status(self) -> None:
         self._full_mode = False
         self._dismissed_runs.clear()
+        self._status_error_dismissed = False
         self.refresh()
         if self._phase != "idle":
             self.show()
@@ -258,14 +265,20 @@ class UpdaterWindow(QWidget):
             user_state = self.state_store.load()
             system_state = self.system_state_store.load() if self.system_state_store else None
         except StateError as exc:
+            previous_phase = self._phase
             self.heading.setText("Updater status unavailable")
             self.message.setText(str(exc))
             self._phase = "failed"
-            if not self._full_mode:
+            self.close_button.setVisible(True)
+            if previous_phase != self._phase:
+                self.phase_changed.emit(self._phase)
+            if not self._full_mode and not self._status_error_dismissed:
                 self.show()
-                QTimer.singleShot(0, self._position_window)
+                if previous_phase != self._phase:
+                    QTimer.singleShot(0, self._position_window)
             return
 
+        self._status_error_dismissed = False
         if not self.policy.updates.run_user_tools and user_state.phase != "running":
             user_state = UpdateState(phase="disabled", message="Disabled by administrator policy.")
         if (
@@ -284,11 +297,10 @@ class UpdaterWindow(QWidget):
         states = {"user-tools": user_state}
         if system_state is not None:
             states["system"] = system_state
-        dismissible = {"awaiting_response", "running", "deferred", "succeeded", "failed"}
         live_run_keys = {
             (task, state.run_id)
             for task, state in states.items()
-            if state.run_id is not None and state.phase in dismissible
+            if state.phase in _DISMISSIBLE_PHASES
         }
         self._dismissed_runs.intersection_update(live_run_keys)
 
@@ -342,7 +354,9 @@ class UpdaterWindow(QWidget):
             self.hide()
         elif not self._full_mode:
             dismissible_states = [
-                (task, state) for task, state in states.items() if state.phase in dismissible
+                (task, state)
+                for task, state in states.items()
+                if state.phase in _DISMISSIBLE_PHASES
             ]
             dismissed = bool(dismissible_states) and all(
                 (task, state.run_id) in self._dismissed_runs for task, state in dismissible_states
@@ -356,36 +370,73 @@ class UpdaterWindow(QWidget):
 
         if previous_phase != self._phase:
             self.phase_changed.emit(self._phase)
-            if self._phase in {"succeeded", "failed"}:
-                QTimer.singleShot(30_000, lambda phase=self._phase: self._hide_if_phase(phase))
+            if self._phase in _TERMINAL_PHASES:
+                terminal_run_keys = frozenset(
+                    (task, state.run_id)
+                    for task, state in states.items()
+                    if state.phase in _TERMINAL_PHASES
+                )
+                QTimer.singleShot(
+                    30_000,
+                    lambda phase=self._phase, keys=terminal_run_keys: self._hide_if_phase(
+                        phase, keys
+                    ),
+                )
 
     def _position_window(self) -> None:
         self._placement.position_bottom_right()
 
-    def _hide_if_phase(self, expected_phase: str) -> None:
+    def _hide_if_phase(
+        self,
+        expected_phase: str,
+        expected_run_keys: frozenset[tuple[str, str | None]] | None = None,
+    ) -> None:
         if self._phase == expected_phase and not self._full_mode:
+            if (
+                expected_run_keys is not None
+                and self._terminal_run_keys({task for task, _run_id in expected_run_keys})
+                != expected_run_keys
+            ):
+                return
+            self._dismiss_current_runs()
             self.hide()
 
+    def _terminal_run_keys(
+        self, tasks: set[str] | None = None
+    ) -> frozenset[tuple[str, str | None]]:
+        keys: set[tuple[str, str | None]] = set()
+        for task, store in (
+            ("system", self.system_state_store),
+            ("user-tools", self.state_store),
+        ):
+            if store is None or (tasks is not None and task not in tasks):
+                continue
+            try:
+                state = store.load()
+            except StateError:
+                continue
+            if state.phase in _TERMINAL_PHASES:
+                keys.add((task, state.run_id))
+        return frozenset(keys)
+
+    def _dismiss_current_runs(self) -> None:
+        for task, store in (
+            ("system", self.system_state_store),
+            ("user-tools", self.state_store),
+        ):
+            if store is None:
+                continue
+            try:
+                state = store.load()
+            except StateError:
+                continue
+            if state.phase in _DISMISSIBLE_PHASES:
+                self._dismissed_runs.add((task, state.run_id))
+
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt override name
-        if self._phase in {"awaiting_response", "running", "deferred", "succeeded", "failed"}:
-            for task, state in (
-                ("system", self.system_state_store),
-                ("user-tools", self.state_store),
-            ):
-                if state is None:
-                    continue
-                try:
-                    update = state.load()
-                except StateError:
-                    continue
-                if update.phase in {
-                    "awaiting_response",
-                    "running",
-                    "deferred",
-                    "succeeded",
-                    "failed",
-                }:
-                    self._dismissed_runs.add((task, update.run_id))
+        if self._phase in _DISMISSIBLE_PHASES:
+            self._dismiss_current_runs()
+        self._status_error_dismissed = True
         event.accept()
 
 

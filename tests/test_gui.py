@@ -99,6 +99,102 @@ def test_closing_running_window_hides_only_the_ui_and_does_not_cancel_update(
     window.deleteLater()
 
 
+def test_auto_hidden_terminal_window_stays_hidden_after_poll(tmp_path: Path) -> None:
+    _application()
+    store = StateStore(tmp_path / "state.json")
+    store.save(UpdateState(phase="failed", run_id="failed-run", message="Update failed."))
+    window = UpdaterWindow(load_policy(), store, tmp_path / "request.json", start_timer=False)
+
+    window.refresh()
+    assert window.isVisible()
+
+    window._hide_if_phase("failed")
+    assert window.isHidden()
+    window.refresh()
+
+    assert window.isHidden()
+    window.deleteLater()
+
+
+def test_old_terminal_hide_timer_does_not_hide_a_later_run(tmp_path: Path) -> None:
+    _application()
+    store = StateStore(tmp_path / "state.json")
+    store.save(UpdateState(phase="failed", run_id="old-run"))
+    window = UpdaterWindow(load_policy(), store, tmp_path / "request.json", start_timer=False)
+
+    window.refresh()
+    old_run_keys = frozenset({("user-tools", "old-run")})
+    store.save(UpdateState(phase="failed", run_id="new-run"))
+    window.refresh()
+
+    window._hide_if_phase("failed", old_run_keys)
+
+    assert window.isVisible()
+    window.deleteLater()
+
+
+def test_terminal_hide_timer_ignores_disabled_task_state(tmp_path: Path) -> None:
+    _application()
+    policy_file = tmp_path / "project.yaml"
+    policy_file.write_text(
+        "version: 1\nupdates:\n  run_user_tools: false\n",
+        encoding="utf-8",
+    )
+    user_store = StateStore(tmp_path / "user-state.json")
+    user_store.save(UpdateState(phase="succeeded", run_id="old-user-run"))
+    system_store = StateStore(tmp_path / "system-state.json")
+    system_store.save(UpdateState(phase="failed", run_id="system-run"))
+    window = UpdaterWindow(
+        load_policy(policy_file),
+        user_store,
+        tmp_path / "request.json",
+        start_timer=False,
+        system_state_store=system_store,
+    )
+    window.refresh()
+    expected_run_keys = frozenset({("system", "system-run")})
+
+    window._hide_if_phase("failed", expected_run_keys)
+
+    assert window.isHidden()
+    window.refresh()
+    assert window.isHidden()
+    window.deleteLater()
+
+
+def test_dismissing_terminal_state_without_run_id_does_not_respawn(tmp_path: Path) -> None:
+    _application()
+    store = StateStore(tmp_path / "state.json")
+    store.save(UpdateState(phase="failed", message="Setup failed."))
+    window = UpdaterWindow(load_policy(), store, tmp_path / "request.json", start_timer=False)
+
+    window.refresh()
+    window.close()
+    window.refresh()
+
+    assert window.isHidden()
+    window.deleteLater()
+
+
+def test_dismissing_unreadable_state_does_not_respawn_until_requested(tmp_path: Path) -> None:
+    _application()
+    state_path = tmp_path / "state.json"
+    state_path.write_text("{", encoding="utf-8")
+    store = StateStore(state_path)
+    window = UpdaterWindow(load_policy(), store, tmp_path / "request.json", start_timer=False)
+
+    window.refresh()
+    assert window.isVisible()
+    assert window.close_button.isVisible()
+    window.close()
+    window.refresh()
+    assert window.isHidden()
+
+    window.show_status()
+    assert window.isVisible()
+    window.deleteLater()
+
+
 def test_admin_settings_dialog_builds_a_valid_policy_mapping(tmp_path: Path) -> None:
     _application()
     dialog = AdminSettingsDialog(load_policy())
