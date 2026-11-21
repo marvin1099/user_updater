@@ -53,6 +53,7 @@ def run_gui(system_mode: bool = False) -> int:
         system_manual_retry_limit=policy.retry.system.user_manual_attempts,
         user_manual_retry_limit=policy.retry.user_tools.user_manual_attempts,
         admin_allowed_user_tools=policy.updates.user_tools,
+        admin_allows_custom_tools=policy.updates.allow_custom_user_tools,
         user_tool_preferences=user_tool_preferences,
     )
 
@@ -83,6 +84,7 @@ def run_gui(system_mode: bool = False) -> int:
         full_window.apply_user_tool_policy(
             updated_policy.updates.run_user_tools,
             updated_policy.updates.user_tools,
+            updated_policy.updates.allow_custom_user_tools,
         )
         full_window.refresh()
 

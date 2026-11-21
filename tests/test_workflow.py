@@ -40,7 +40,9 @@ def test_topgrade_runs_as_the_temporary_builder_and_is_cleaned(tmp_path: Path) -
     assert not topgrade_config.exists()
 
     def runner(command: list[str], **kwargs: object) -> CommandResult:
-        assert topgrade_config.read_text(encoding="utf-8") == "[misc]\nassume_yes = true\n"
+        assert topgrade_config.read_text(encoding="utf-8") == (
+            "[misc]\nassume_yes = true\n\n[flatpak]\nuse_sudo = true\n"
+        )
         config_stat = topgrade_config.stat()
         assert stat.S_IMODE(config_stat.st_mode) == 0o600
         assert config_stat.st_uid == manager.account.uid
@@ -61,7 +63,14 @@ def test_topgrade_runs_as_the_temporary_builder_and_is_cleaned(tmp_path: Path) -
     result = workflow.run(output.append)
 
     assert result.returncode == 0
-    assert calls[0][0] == ["/usr/bin/topgrade", "--cleanup", "--no-retry"]
+    assert calls[0][0] == [
+        "/usr/bin/topgrade",
+        "--cleanup",
+        "--no-retry",
+        "--only",
+        "system",
+        "flatpak",
+    ]
     assert calls[0][1]["user_id"] == manager.account.uid
     assert calls[0][1]["group_id"] == manager.account.gid
     assert calls[0][1]["env"]["HOME"] == str(manager.account.home)

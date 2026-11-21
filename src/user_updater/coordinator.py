@@ -134,6 +134,25 @@ class UpdateCoordinator:
         self.state_store.save(pending)
         return TickAction.WAITING_FOR_RESPONSE
 
+    def run_now(self, now: datetime) -> TickAction:
+        """Create a fresh run that bypasses its normal schedule and response window."""
+        state = self.state_store.load()
+        if state.phase == "running":
+            raise ValueError("an update is already marked as running")
+        run_id = uuid4().hex
+        self.state_store.save(
+            UpdateState(
+                phase="running",
+                run_id=run_id,
+                retry_group_id=run_id,
+                scheduled_for=now.isoformat(),
+                next_scheduled_at=state.next_scheduled_at,
+                started_at=now.isoformat(),
+                message="An administrator started machine-wide updates.",
+            )
+        )
+        return TickAction.RUN
+
     def record_output(self, lines: tuple[str, ...], message: str | None = None) -> None:
         state = self.state_store.load()
         self.state_store.save(

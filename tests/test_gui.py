@@ -5,8 +5,10 @@ from pathlib import Path
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QApplication
 
+from user_updater.gui import admin as admin_gui
 from user_updater.gui.admin import AdminSettingsDialog
 from user_updater.gui.full_window import FullDetailsWindow
 from user_updater.gui.window import UpdaterWindow
@@ -100,6 +102,9 @@ def test_closing_running_window_hides_only_the_ui_and_does_not_cancel_update(
 def test_admin_settings_dialog_builds_a_valid_policy_mapping(tmp_path: Path) -> None:
     _application()
     dialog = AdminSettingsDialog(load_policy())
+    assert "scripts" in dialog.allow_custom_tools.text().lower()
+    assert dialog.allow_custom_tools.isChecked()
+    assert dialog.run_system_now_button.isEnabled()
     dialog.run_user_tools.setChecked(False)
     dialog.user_interval.setValue(12)
     dialog.allow_custom_tools.setChecked(False)
@@ -123,6 +128,29 @@ def test_admin_settings_dialog_builds_a_valid_policy_mapping(tmp_path: Path) -> 
     }
     assert mapping["retry"]["user_tools"]["automatic_attempts"] == 1
     assert mapping["retry"]["user_tools"]["user_manual_attempts"] == 3
+    dialog.deleteLater()
+
+
+def test_admin_run_now_button_starts_the_authorized_system_command(monkeypatch) -> None:
+    _application()
+    dialog = AdminSettingsDialog(load_policy())
+    commands: list[tuple[str, list[str]]] = []
+    monkeypatch.setattr(
+        admin_gui, "_trusted_system_executable", lambda: "/usr/local/bin/user-updater"
+    )
+    monkeypatch.setattr(admin_gui.shutil, "which", lambda _name: "/usr/bin/pkexec")
+    monkeypatch.setattr(
+        admin_gui.QProcess,
+        "startDetached",
+        lambda executable, arguments: (commands.append((executable, arguments)) or True, 1234),
+    )
+    monkeypatch.setattr(admin_gui.QMessageBox, "information", lambda *_args: None)
+
+    dialog.run_system_now_button.click()
+
+    assert commands == [
+        ("/usr/bin/pkexec", ["/usr/local/bin/user-updater", "run-now", "--system"])
+    ]
     dialog.deleteLater()
 
 
@@ -168,6 +196,41 @@ def test_system_window_keeps_system_and_user_responses_separate(tmp_path: Path) 
     window.deleteLater()
 
 
+def test_system_minimal_view_compacts_failures_and_hides_idle_task(tmp_path: Path) -> None:
+    _application()
+    system_store = StateStore(tmp_path / "system.json")
+    user_store = StateStore(tmp_path / "user.json")
+    system_store.save(
+        UpdateState(
+            phase="idle",
+            next_scheduled_at=(datetime.now().astimezone() + timedelta(days=1)).isoformat(),
+        )
+    )
+    user_store.save(
+        UpdateState(
+            phase="failed",
+            run_id="failed-user-run",
+            message="The detailed failure should stay in Full details.",
+        )
+    )
+
+    window = UpdaterWindow(
+        load_policy(),
+        user_store,
+        tmp_path / "user-request.json",
+        system_state_store=system_store,
+        admin_enabled=True,
+    )
+
+    assert window.system_panel is not None
+    assert window.system_panel.isHidden()
+    assert window.user_panel.status.text() == "Your user tools: Failed"
+    assert "detailed failure" not in window.message.text()
+    assert "Full details" in window.message.text()
+    assert window.height() < 350
+    window.deleteLater()
+
+
 def test_full_details_has_read_only_task_tabs_and_returns_after_completion(tmp_path: Path) -> None:
     app = _application()
     system_store = StateStore(tmp_path / "system.json")
@@ -206,6 +269,28 @@ def test_full_details_has_read_only_task_tabs_and_returns_after_completion(tmp_p
     window.refresh()
     app.processEvents()
     assert window._completion_emitted
+    window.deleteLater()
+
+
+def test_full_details_renders_ansi_color_without_showing_escape_codes(tmp_path: Path) -> None:
+    _application()
+    system_store = StateStore(tmp_path / "system.json")
+    user_store = StateStore(tmp_path / "user.json")
+    user_store.save(
+        UpdateState(
+            phase="running",
+            run_id="ansi-run",
+            last_output=("\x1b[31mfailed\x1b[0m plain",),
+        )
+    )
+
+    window = FullDetailsWindow(system_store, user_store)
+    text = window.user_tab.terminal.toPlainText()
+    colored_word = window.user_tab.terminal.document().find("failed")
+
+    assert text == "failed plain"
+    assert colored_word.hasSelection()
+    assert colored_word.charFormat().foreground().color() == QColor("#aa0000")
     window.deleteLater()
 
 
@@ -291,11 +376,35 @@ def test_users_can_toggle_only_admin_enabled_personal_tools(tmp_path: Path) -> N
 
     assert set(window.user_tab.tool_checkboxes) == {"flatpak", "pipx"}
     assert all(check.isChecked() for check in window.user_tab.tool_checkboxes.values())
+    assert "tools.d" in window.user_tab.custom_tools_checkbox.text()
+    assert window.user_tab.custom_tools_checkbox.isChecked()
     window.user_tab.tool_checkboxes["flatpak"].setChecked(False)
+    window.user_tab.custom_tools_checkbox.setChecked(False)
     window.user_tab.save_tools_button.click()
 
     assert preferences.load(("flatpak", "pipx")) == ("pipx",)
+    assert preferences.load_all(("flatpak", "pipx")).custom_tools is False
     assert "saved" in window.user_tab.tool_preferences_status.text().lower()
+    window.deleteLater()
+
+
+def test_admin_policy_hides_and_disables_the_user_tools_d_checkbox(tmp_path: Path) -> None:
+    _application()
+    preferences = UserToolPreferenceStore(
+        tmp_path / "config" / "tool_preferences.json",
+        owner_uid=os.getuid(),
+    )
+    window = FullDetailsWindow(
+        None,
+        StateStore(tmp_path / "user.json"),
+        system_enabled=False,
+        admin_allowed_user_tools=("flatpak",),
+        admin_allows_custom_tools=False,
+        user_tool_preferences=preferences,
+    )
+
+    assert window.user_tab.custom_tools_checkbox.isHidden()
+    assert preferences.load_all(("flatpak",), admin_allows_custom=False).custom_tools is False
     window.deleteLater()
 
 

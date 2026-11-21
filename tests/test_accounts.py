@@ -1,11 +1,12 @@
 from pathlib import Path
 
-from user_updater.accounts import BuilderAccount, BuilderAccountManager
+from user_updater.accounts import BuilderAccount, BuilderAccountManager, LinuxAccountBackend
 from user_updater.policy import load_policy
 
 
 class FakeAccountBackend:
     package_manager = "/usr/bin/pacman"
+    flatpak: str | None = None
 
     def __init__(self) -> None:
         self.created: list[tuple[str, Path]] = []
@@ -77,6 +78,32 @@ def test_unrestricted_builder_sudo_requires_explicit_admin_policy(tmp_path: Path
     account = manager.create()
 
     assert f"{account.name} ALL=(ALL:ALL) NOPASSWD: ALL" in backend.sudoers[account.sudoers_path]
+
+
+def test_garuda_update_wrapper_is_preferred_over_pacman(monkeypatch) -> None:
+    existing = {"/usr/bin/garuda-update", "/usr/bin/pacman"}
+    monkeypatch.setattr(Path, "is_file", lambda self: str(self) in existing)
+
+    assert LinuxAccountBackend().package_manager == "/usr/bin/garuda-update"
+
+
+def test_temporary_builder_sudoers_allows_garuda_update_wrapper(tmp_path: Path) -> None:
+    backend = FakeAccountBackend()
+    backend.package_manager = "/usr/bin/garuda-update"
+    backend.flatpak = "/usr/bin/flatpak"
+    manager = BuilderAccountManager(
+        home_root=tmp_path / "builders",
+        sudoers_root=tmp_path / "sudoers",
+        policy=load_policy(),
+        backend=backend,
+    )
+
+    account = manager.create()
+
+    assert backend.sudoers[account.sudoers_path] == (
+        f"{account.name} ALL=(root) NOPASSWD: /usr/bin/garuda-update, "
+        "/usr/bin/garuda-update *, /usr/bin/flatpak, /usr/bin/flatpak *\n"
+    )
 
 
 def test_stale_builder_and_orphan_sudoers_are_removed(tmp_path: Path) -> None:

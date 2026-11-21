@@ -57,6 +57,16 @@ def build_parser() -> argparse.ArgumentParser:
     retry = commands.add_parser("retry", help="Manually retry a failed update")
     _add_scope(retry)
 
+    run_now = commands.add_parser(
+        "run-now", help="Start a fresh machine-wide system update immediately"
+    )
+    run_now.add_argument(
+        "--system",
+        action="store_true",
+        required=True,
+        help="Run machine-wide updates (administrator authorization required)",
+    )
+
     history = commands.add_parser("history", help="Show recent update run summaries")
     _add_scope(history)
     history.add_argument("--limit", type=int, default=10, help="Number of recent runs (1-20)")
@@ -101,6 +111,10 @@ def main(argv: list[str] | None = None) -> int:
             return _status(system_mode)
         if args.command == "retry":
             return _retry(system_mode)
+        if args.command == "run-now":
+            if not getattr(args, "system", False):
+                raise ValueError("run-now requires the explicit --system option")
+            return _run_system_now(system_mode)
         if args.command == "history":
             return _history(system_mode, args.limit)
         if args.command == "logs":
@@ -352,6 +366,53 @@ def _retry(system_mode: bool) -> int:
     return int(final_state.phase == "failed")
 
 
+def _run_system_now(system_mode: bool) -> int:
+    if not system_mode:
+        raise ValueError("immediate machine-wide updates require --system")
+    _require_root("immediate machine-wide updates")
+    executable = _executable_path()
+    _require_trusted_system_install(executable)
+    paths = system_paths()
+    policy = load_policy(paths.policy if paths.policy.exists() else None)
+    if not policy.updates.run_system:
+        raise ValueError("machine-wide updates are disabled by administrator policy")
+
+    system_policy = dataclasses.replace(
+        policy,
+        updates=dataclasses.replace(
+            policy.updates,
+            run_user_tools=False,
+            allow_custom_user_tools=False,
+        ),
+    )
+    logger = configure_logging(paths.log_file)
+    state_store = StateStore(paths.state, file_mode=0o644)
+    builder = BuilderAccountManager(paths.builder_home, paths.sudoers, system_policy)
+    workflow = UpdateWorkflow(
+        system_policy,
+        builder_manager=builder,
+        session_detector=lambda: [],
+    )
+    service = UpdateService(
+        system_policy,
+        state_store,
+        workflow,
+        request_homes=local_request_homes,
+        on_log=logger.info,
+        task_id="system",
+        lock_file=paths.state.parent / "locks" / "system.lock",
+    )
+    action = service.run_now()
+    if action is TickAction.WORKER_ALREADY_ACTIVE:
+        raise RuntimeError("a machine-wide update is already running")
+    if action is TickAction.RECOVERED_INTERRUPTED_RUN:
+        print(state_store.load().message)
+        return 1
+    final_state = state_store.load()
+    print(final_state.message)
+    return int(final_state.phase == "failed")
+
+
 def _retry_user() -> int:
     managed_paths = system_paths()
     if managed_paths.policy.is_file():
@@ -398,7 +459,10 @@ def _user_policy_for(user: DesktopUser, policy, logger):
         owner_uid=user.uid,
     )
     try:
-        selected_tools = preferences.load(policy.updates.user_tools)
+        selected = preferences.load_all(
+            policy.updates.user_tools,
+            admin_allows_custom=policy.updates.allow_custom_user_tools,
+        )
     except ToolPreferenceError as exc:
         logger.info(
             "Ignoring invalid personal tool preferences for %s; using admin defaults: %s",
@@ -406,12 +470,17 @@ def _user_policy_for(user: DesktopUser, policy, logger):
             exc,
         )
         selected_tools = policy.updates.user_tools
+        custom_tools_enabled = policy.updates.allow_custom_user_tools
+    else:
+        selected_tools = selected.tools
+        custom_tools_enabled = selected.custom_tools
     return dataclasses.replace(
         policy,
         updates=dataclasses.replace(
             policy.updates,
             run_system=False,
             user_tools=selected_tools,
+            allow_custom_user_tools=custom_tools_enabled,
         ),
     )
 
@@ -611,7 +680,8 @@ def _require_trusted_system_install(executable: Path) -> None:
             if metadata.st_uid != 0 or metadata.st_mode & 0o022:
                 raise RuntimeError(
                     "system mode requires a root-owned, non-writable installation; "
-                    "install with `sudo uv tool install --system .` first"
+                    "install with `sudo env UV_TOOL_DIR=/opt/user-updater/uv-tools "
+                    "UV_TOOL_BIN_DIR=/usr/local/bin uv tool install .` first"
                 )
 
 

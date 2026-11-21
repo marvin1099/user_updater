@@ -16,6 +16,8 @@ from .policy import Policy
 
 _ACCOUNT_NAME = re.compile(r"^uupd-[a-f0-9]{10}$")
 _PACKAGE_MANAGERS = (
+    # Garuda's Topgrade integration invokes this wrapper instead of pacman.
+    "/usr/bin/garuda-update",
     "/usr/bin/pacman",
     "/usr/bin/apt-get",
     "/usr/bin/dnf",
@@ -40,6 +42,9 @@ class AccountBackend(Protocol):
     @property
     def package_manager(self) -> str | None: ...
 
+    @property
+    def flatpak(self) -> str | None: ...
+
     def create_user(self, name: str, home: Path) -> None: ...
 
     def user_ids(self, name: str) -> tuple[int, int]: ...
@@ -59,6 +64,12 @@ class LinuxAccountBackend:
     @property
     def package_manager(self) -> str | None:
         return next((path for path in _PACKAGE_MANAGERS if Path(path).is_file()), None)
+
+    @property
+    def flatpak(self) -> str | None:
+        return shutil.which(
+            "flatpak", path="/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
+        )
 
     def create_user(self, name: str, home: Path) -> None:
         home.mkdir(mode=0o700, parents=True, exist_ok=False)
@@ -321,4 +332,11 @@ class BuilderAccountManager:
         manager = self.backend.package_manager
         if manager is None:
             raise RuntimeError("no supported system package manager was detected")
-        return f"{name} ALL=(root) NOPASSWD: {manager}, {manager} *\n"
+        commands = [manager]
+        flatpak = self.backend.flatpak
+        if flatpak is not None and flatpak not in commands:
+            commands.append(flatpak)
+        allowed_commands = ", ".join(
+            spec for command in commands for spec in (command, f"{command} *")
+        )
+        return f"{name} ALL=(root) NOPASSWD: {allowed_commands}\n"

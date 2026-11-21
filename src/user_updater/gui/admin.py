@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
+    QPushButton,
     QScrollArea,
     QSpinBox,
     QTimeEdit,
@@ -50,11 +51,18 @@ class AdminSettingsDialog(QDialog):
         self.run_system.setChecked(policy.updates.run_system)
         self.run_user_tools = QCheckBox("Update logged-in users' personal tools")
         self.run_user_tools.setChecked(policy.updates.run_user_tools)
-        self.allow_custom_tools = QCheckBox("Allow user-provided update hooks")
+        self.allow_custom_tools = QCheckBox("Allow user-provided update scripts in tools.d")
         self.allow_custom_tools.setChecked(policy.updates.allow_custom_user_tools)
         form.addRow(self.run_system)
         form.addRow(self.run_user_tools)
         form.addRow(self.allow_custom_tools)
+        scripts_note = QLabel(
+            "When enabled, executable scripts in each user's "
+            "~/.config/user_updater/tools.d directory run as that user during "
+            "personal-tool updates."
+        )
+        scripts_note.setWordWrap(True)
+        form.addRow(scripts_note)
 
         system_schedule = QGroupBox("System update schedule")
         system_form = QFormLayout(system_schedule)
@@ -163,6 +171,14 @@ class AdminSettingsDialog(QDialog):
         scroll.setWidget(content)
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
+        )
+        self.run_system_now_button = QPushButton("Run system updates now")
+        self.run_system_now_button.setObjectName("runSystemNow")
+        self.run_system_now_button.setEnabled(policy.updates.run_system)
+        self.run_system_now_button.clicked.connect(lambda: start_system_update_now(self))
+        self.run_system.toggled.connect(self.run_system_now_button.setEnabled)
+        buttons.addButton(
+            self.run_system_now_button, QDialogButtonBox.ButtonRole.ActionRole
         )
         buttons.accepted.connect(self._validate_and_accept)
         buttons.rejected.connect(self.reject)
@@ -337,6 +353,28 @@ def start_system_retry(parent: QWidget) -> None:
 
     monitor.timeout.connect(check_process)
     monitor.start()
+
+
+def start_system_update_now(parent: QWidget) -> None:
+    """Start a fresh machine-wide update after polkit authorization."""
+    try:
+        executable = _trusted_system_executable()
+        pkexec = shutil.which("pkexec")
+        if pkexec is None:
+            raise RuntimeError("pkexec is required to start machine-wide updates")
+    except (OSError, RuntimeError, ValueError) as exc:
+        QMessageBox.warning(parent, "System updates", str(exc))
+        return
+
+    started, _pid = QProcess.startDetached(pkexec, [executable, "run-now", "--system"])
+    if not started:
+        QMessageBox.warning(parent, "System updates", "Could not start pkexec.")
+        return
+    QMessageBox.information(
+        parent,
+        "System updates",
+        "Machine-wide updates were started. Follow progress in Full details.",
+    )
 
 
 def _spin(value: int, minimum: int, maximum: int) -> QSpinBox:

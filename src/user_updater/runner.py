@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import fcntl
 import os
+import pty
 import re
 import selectors
 import signal
+import struct
 import subprocess
+import termios
 import threading
 import time
 from collections import deque
@@ -14,8 +18,10 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-_ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
-_LINE_BREAK = re.compile(r"[\r\n]+")
+_ANSI_ESCAPE = re.compile(
+    r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\)|[@-_])"
+)
+_ANSI_SGR = re.compile(r"\x1b\[[0-?]*[ -/]*m")
 _MAX_UNTERMINATED_LINE = 64 * 1024
 
 
@@ -27,10 +33,30 @@ class CommandResult:
     output_tail: tuple[str, ...]
 
 
+def strip_ansi(text: str) -> str:
+    """Return plain text for logs and command-result parsing."""
+    return _ANSI_ESCAPE.sub("", text)
+
+
+def _retain_sgr(text: str) -> str:
+    """Keep SGR styling codes while dropping cursor and terminal-control codes."""
+    pieces: list[str] = []
+    offset = 0
+    for match in _ANSI_ESCAPE.finditer(text):
+        pieces.append(text[offset : match.start()])
+        sequence = match.group()
+        if _ANSI_SGR.fullmatch(sequence):
+            pieces.append(sequence)
+        offset = match.end()
+    pieces.append(text[offset:])
+    return "".join(pieces)
+
+
 def run_command(
     command: Sequence[str],
     *,
     on_output: Callable[[str], None],
+    on_progress: Callable[[str], None] | None = None,
     on_idle: Callable[[float], None] | None = None,
     env: Mapping[str, str] | None = None,
     cwd: Path | None = None,
@@ -42,11 +68,12 @@ def run_command(
     terminate_grace_seconds: float = 5,
     tail_lines: int = 200,
 ) -> CommandResult:
-    """Run an executable without a shell and stream its merged output.
+    """Run an executable without a shell and stream its merged PTY output.
 
-    A quiet child is reported through ``on_idle`` but is never timed out. The
-    process group is terminated only when an explicit cancellation is set.
-    Output memory is bounded to a recent tail plus one capped unterminated line.
+    The child sees a terminal on stdout/stderr so TTY-aware tools can emit color
+    and progress. Stdin remains disconnected. A quiet child is reported through
+    ``on_idle`` but is never timed out. Output memory is bounded to a recent tail
+    plus one capped unterminated line.
     """
     if isinstance(command, (str, bytes)) or not command or not command[0]:
         raise ValueError("command must be a non-empty sequence of arguments")
@@ -62,49 +89,81 @@ def run_command(
         privilege_options["user"] = user_id
         privilege_options["group"] = group_id
         privilege_options["extra_groups"] = ()
-    process = subprocess.Popen(
-        list(command),
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        cwd=cwd,
-        env=dict(env) if env is not None else None,
-        bufsize=0,
-        close_fds=True,
-        shell=False,
-        start_new_session=True,
-        **privilege_options,
-    )
-    if process.stdout is None:
-        process.kill()
-        raise RuntimeError("failed to open child output pipe")
+    master_fd, slave_fd = pty.openpty()
+    try:
+        terminal_attributes = termios.tcgetattr(slave_fd)
+        terminal_attributes[1] &= ~termios.ONLCR
+        termios.tcsetattr(slave_fd, termios.TCSANOW, terminal_attributes)
+        fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, struct.pack("HHHH", 50, 120, 0, 0))
+        child_env = dict(env) if env is not None else os.environ.copy()
+        child_env.setdefault("TERM", "xterm-256color")
+        process = subprocess.Popen(
+            list(command),
+            stdin=subprocess.DEVNULL,
+            stdout=slave_fd,
+            stderr=subprocess.STDOUT,
+            cwd=cwd,
+            env=child_env,
+            bufsize=0,
+            close_fds=True,
+            shell=False,
+            start_new_session=True,
+            **privilege_options,
+        )
+    except BaseException:
+        os.close(master_fd)
+        raise
+    finally:
+        os.close(slave_fd)
 
     selector = selectors.DefaultSelector()
-    selector.register(process.stdout, selectors.EVENT_READ)
+    selector.register(master_fd, selectors.EVENT_READ)
     pending = ""
+    progress_active = False
     cancelled = False
     cancelled_at: float | None = None
     eof = False
 
-    def emit(line: str) -> None:
-        clean = _ANSI_ESCAPE.sub("", line).strip()
-        if clean:
-            output_tail.append(clean)
-            on_output(clean)
+    def emit(line: str, *, progress: bool = False) -> None:
+        nonlocal progress_active
+        clean = strip_ansi(line)
+        if clean.strip():
+            clean = clean.strip()
+            rendered = _retain_sgr(line)
+            if progress:
+                if progress_active and output_tail:
+                    output_tail[-1] = clean
+                else:
+                    output_tail.append(clean)
+                (on_progress or on_output)(rendered)
+                progress_active = True
+            else:
+                output_tail.append(clean)
+                on_output(rendered)
+                progress_active = False
 
     def drain_text(text: str, final: bool = False) -> None:
-        nonlocal pending
-        pending += text
-        parts = _LINE_BREAK.split(pending)
+        nonlocal pending, progress_active
+        for character in text:
+            if character == "\r":
+                if pending:
+                    emit(pending, progress=True)
+                    pending = ""
+            elif character == "\n":
+                if pending:
+                    emit(pending, progress=progress_active)
+                    pending = ""
+                progress_active = False
+            else:
+                pending += character
+                while len(pending) > _MAX_UNTERMINATED_LINE:
+                    emit(pending[:_MAX_UNTERMINATED_LINE], progress=progress_active)
+                    pending = pending[_MAX_UNTERMINATED_LINE:]
         if final:
-            complete, pending = parts, ""
-        else:
-            complete, pending = parts[:-1], parts[-1]
-        for line in complete:
-            emit(line)
-        while len(pending) > _MAX_UNTERMINATED_LINE:
-            emit(pending[:_MAX_UNTERMINATED_LINE])
-            pending = pending[_MAX_UNTERMINATED_LINE:]
+            if pending:
+                emit(pending, progress=progress_active)
+                pending = ""
+            progress_active = False
 
     try:
         while not eof:
@@ -126,7 +185,7 @@ def run_command(
             events = selector.select(poll_interval)
             if events:
                 try:
-                    chunk = os.read(process.stdout.fileno(), 8192)
+                    chunk = os.read(master_fd, 8192)
                 except OSError:
                     chunk = b""
                 if chunk:
@@ -136,7 +195,7 @@ def run_command(
                     drain_text(chunk.decode("utf-8", errors="replace"))
                 else:
                     eof = True
-                    selector.unregister(process.stdout)
+                    selector.unregister(master_fd)
 
             now = time.monotonic()
             if (
@@ -160,7 +219,7 @@ def run_command(
         )
     finally:
         selector.close()
-        process.stdout.close()
+        os.close(master_fd)
         if process.poll() is None:
             _signal_process_group(process, signal.SIGKILL)
             process.wait()

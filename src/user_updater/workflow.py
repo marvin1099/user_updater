@@ -16,6 +16,7 @@ from .user_tools import ToolResult, UserToolUpdater
 Runner = Callable[..., CommandResult]
 Which = Callable[..., str | None]
 Output = Callable[[str], None]
+Progress = Callable[[str], None]
 
 
 @dataclass(frozen=True)
@@ -48,13 +49,15 @@ class UpdateWorkflow:
         self,
         on_output: Output,
         on_idle: Callable[[float], None] | None = None,
+        *,
+        on_progress: Progress | None = None,
     ) -> WorkflowResult:
         failed = False
         system_result: CommandResult | None = None
         user_results: list[tuple[str, ToolResult]] = []
 
         if self.policy.updates.run_system:
-            system_result = self._run_system_update(on_output, on_idle)
+            system_result = self._run_system_update(on_output, on_idle, on_progress)
             failed = system_result.returncode != 0
 
         if self.policy.updates.run_user_tools:
@@ -69,6 +72,11 @@ class UpdateWorkflow:
                     lambda line, name=user.username: on_output(f"[{name}] {line}"),
                     on_idle,
                     allow_custom_tools=self.policy.updates.allow_custom_user_tools,
+                    on_progress=(
+                        (lambda line, name=user.username: on_progress(f"[{name}] {line}"))
+                        if on_progress is not None
+                        else None
+                    ),
                 )
                 for result in results:
                     user_results.append((user.username, result))
@@ -85,6 +93,7 @@ class UpdateWorkflow:
         self,
         on_output: Output,
         on_idle: Callable[[float], None] | None,
+        on_progress: Progress | None,
     ) -> CommandResult:
         account: BuilderAccount | None = None
         result = CommandResult(1, 0.0, False, ())
@@ -104,14 +113,19 @@ class UpdateWorkflow:
                 self._write_topgrade_config(account)
                 environment = _builder_environment(account)
                 on_output(f"Running topgrade as temporary builder {account.name}.")
+                runner_options: dict[str, object] = {
+                    "on_output": on_output,
+                    "on_idle": on_idle,
+                    "env": environment,
+                    "cwd": account.home,
+                    "user_id": account.uid,
+                    "group_id": account.gid,
+                }
+                if on_progress is not None:
+                    runner_options["on_progress"] = on_progress
                 result = self.runner(
-                    [executable, "--cleanup", "--no-retry"],
-                    on_output=on_output,
-                    on_idle=on_idle,
-                    env=environment,
-                    cwd=account.home,
-                    user_id=account.uid,
-                    group_id=account.gid,
+                    [executable, "--cleanup", "--no-retry", "--only", "system", "flatpak"],
+                    **runner_options,
                 )
                 if result.returncode != 0:
                     on_output(f"topgrade exited with status {result.returncode}.")
@@ -139,7 +153,9 @@ class UpdateWorkflow:
         config_directory = account.home / ".config"
         config_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         config_file = config_directory / "topgrade.toml"
-        config_file.write_text("[misc]\nassume_yes = true\n", encoding="utf-8")
+        config_file.write_text(
+            "[misc]\nassume_yes = true\n\n[flatpak]\nuse_sudo = true\n", encoding="utf-8"
+        )
         os.chmod(config_file, 0o600)
         os.chown(config_directory, account.uid, account.gid)
         os.chown(config_file, account.uid, account.gid)

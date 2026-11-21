@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QFontDatabase, QTextCursor
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QTextCharFormat
 from PySide6.QtWidgets import (
     QCheckBox,
     QGroupBox,
@@ -27,6 +28,27 @@ from ..tool_preferences import ToolPreferenceError, UserToolPreferenceStore
 from .placement import WindowPlacement
 
 _ACTIVE_PHASES = {"awaiting_response", "running", "deferred"}
+_SGR_SEQUENCE = re.compile(r"\x1b\[([0-9;]*)m")
+_ANSI_COLORS = (
+    "#000000",
+    "#aa0000",
+    "#00aa00",
+    "#aa5500",
+    "#0000aa",
+    "#aa00aa",
+    "#00aaaa",
+    "#aaaaaa",
+    "#555555",
+    "#ff5555",
+    "#55ff55",
+    "#ffff55",
+    "#5555ff",
+    "#ff55ff",
+    "#55ffff",
+    "#ffffff",
+)
+_TERMINAL_FOREGROUND = QColor("#dbe7f1")
+_TERMINAL_BACKGROUND = QColor("#11151a")
 
 
 class _TaskTab(QWidget):
@@ -40,16 +62,22 @@ class _TaskTab(QWidget):
         self.tool_check_layout = QHBoxLayout(self.tool_checks_widget)
         self.tool_check_layout.setContentsMargins(0, 0, 0, 0)
         self.tool_checkboxes: dict[str, QCheckBox] = {}
+        self.custom_tools_checkbox = QCheckBox(
+            "Run my scripts from ~/.config/user_updater/tools.d"
+        )
+        self.custom_tools_checkbox.setObjectName("customToolScripts")
         self.tool_preferences_status = QLabel("")
         self.save_tools_button = QPushButton("Save tool choices")
         tools_layout = QVBoxLayout(self.tools_group)
         tools_layout.addWidget(self.tool_checks_widget)
+        tools_layout.addWidget(self.custom_tools_checkbox)
         tools_controls = QHBoxLayout()
         tools_controls.addWidget(self.tool_preferences_status, stretch=1)
         tools_controls.addWidget(self.save_tools_button)
         tools_layout.addLayout(tools_controls)
         self.tools_group.hide()
         self.terminal = QPlainTextEdit()
+        self._terminal_source = ""
         self.retry_button = QPushButton("Retry failed update")
         self.retry_button.setObjectName("retry")
         self.retry_button.hide()
@@ -90,9 +118,9 @@ class _TaskTab(QWidget):
             self.retry_button.setText(f"Retry failed update ({retry_remaining} left)")
         self.retry_button.setEnabled(not retry_pending)
         text = "\n".join(state.last_output[-200:])
-        if text != self.terminal.toPlainText():
-            self.terminal.setPlainText(text)
-            self.terminal.moveCursor(QTextCursor.MoveOperation.End)
+        if text != self._terminal_source:
+            self._terminal_source = text
+            _render_terminal_text(self.terminal, text)
 
 
 class FullDetailsWindow(QWidget):
@@ -114,6 +142,7 @@ class FullDetailsWindow(QWidget):
         system_manual_retry_limit: int = 0,
         user_manual_retry_limit: int = 0,
         admin_allowed_user_tools: tuple[str, ...] = (),
+        admin_allows_custom_tools: bool = True,
         user_tool_preferences: UserToolPreferenceStore | None = None,
         system_history_store: RunHistoryStore | None = None,
         user_history_store: RunHistoryStore | None = None,
@@ -130,6 +159,7 @@ class FullDetailsWindow(QWidget):
         self.user_request_file = Path(user_request_file) if user_request_file else None
         self.user_tool_preferences = user_tool_preferences
         self.admin_allowed_user_tools = tuple(admin_allowed_user_tools)
+        self.admin_allows_custom_tools = admin_allows_custom_tools
         self.system_history_store = system_history_store or (
             RunHistoryStore(history_path_for_state(system_state_store.path), file_mode=0o644)
             if system_state_store is not None
@@ -289,10 +319,16 @@ class FullDetailsWindow(QWidget):
         except (OSError, StateError, ValueError) as exc:
             self.user_tab.status.setText(f"Your user tools: could not request retry: {exc}")
 
-    def apply_user_tool_policy(self, enabled: bool, admin_allowed_tools: tuple[str, ...]) -> None:
+    def apply_user_tool_policy(
+        self,
+        enabled: bool,
+        admin_allowed_tools: tuple[str, ...],
+        admin_allows_custom_tools: bool = True,
+    ) -> None:
         """Refresh user-selectable choices after an administrator policy change."""
         self.user_tools_enabled = enabled
         self.admin_allowed_user_tools = tuple(admin_allowed_tools)
+        self.admin_allows_custom_tools = admin_allows_custom_tools
         self._configure_user_tool_choices()
         self.refresh()
 
@@ -305,20 +341,30 @@ class FullDetailsWindow(QWidget):
         self.user_tab.tool_checkboxes.clear()
         tools = self.admin_allowed_user_tools
         selected = set(tools)
+        custom_tools_selected = self.admin_allows_custom_tools
         if self.user_tool_preferences is not None:
             try:
-                selected = set(self.user_tool_preferences.load(tools))
+                preferences = self.user_tool_preferences.load_all(
+                    tools,
+                    admin_allows_custom=self.admin_allows_custom_tools,
+                )
+                selected = set(preferences.tools)
+                custom_tools_selected = preferences.custom_tools
                 self.user_tab.tool_preferences_status.setText("")
             except ToolPreferenceError as exc:
                 self.user_tab.tool_preferences_status.setText(
                     f"Preferences unavailable; using admin defaults: {exc}"
                 )
+        self.user_tab.custom_tools_checkbox.setChecked(custom_tools_selected)
+        self.user_tab.custom_tools_checkbox.setVisible(self.admin_allows_custom_tools)
         for tool in tools:
             check = QCheckBox(tool)
             check.setChecked(tool in selected)
             self.user_tab.tool_checkboxes[tool] = check
             self.user_tab.tool_check_layout.addWidget(check)
-        visible = bool(tools) and self.user_tools_enabled and self.user_tool_preferences is not None
+        visible = (
+            bool(tools) or self.admin_allows_custom_tools
+        ) and self.user_tools_enabled and self.user_tool_preferences is not None
         self.user_tab.tools_group.setVisible(visible)
 
     def _save_user_tool_preferences(self) -> None:
@@ -328,7 +374,12 @@ class FullDetailsWindow(QWidget):
             tool for tool, check in self.user_tab.tool_checkboxes.items() if check.isChecked()
         )
         try:
-            self.user_tool_preferences.save(selected, self.admin_allowed_user_tools)
+            self.user_tool_preferences.save(
+                selected,
+                self.admin_allowed_user_tools,
+                custom_tools=self.user_tab.custom_tools_checkbox.isChecked(),
+                admin_allows_custom=self.admin_allows_custom_tools,
+            )
             self.user_tab.tool_preferences_status.setText(
                 "Saved; choices apply to the next personal-tool run."
             )
@@ -379,6 +430,135 @@ def _elapsed_text(state: UpdateState) -> str:
     hours, remainder = divmod(seconds, 3600)
     minutes, seconds = divmod(remainder, 60)
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
+class _TerminalStyle:
+    def __init__(self) -> None:
+        self.reset()
+
+    def reset(self) -> None:
+        self.foreground = QColor(_TERMINAL_FOREGROUND)
+        self.background = QColor(_TERMINAL_BACKGROUND)
+        self.bold = False
+        self.dim = False
+        self.italic = False
+        self.underline = False
+        self.strike = False
+        self.inverse = False
+
+    def format(self) -> QTextCharFormat:
+        text_format = QTextCharFormat()
+        foreground = self.background if self.inverse else self.foreground
+        background = self.foreground if self.inverse else self.background
+        if self.dim:
+            foreground = foreground.darker(150)
+        text_format.setForeground(foreground)
+        text_format.setBackground(background)
+        text_format.setFontWeight(QFont.Weight.Bold if self.bold else QFont.Weight.Normal)
+        text_format.setFontItalic(self.italic)
+        text_format.setFontUnderline(self.underline)
+        text_format.setFontStrikeOut(self.strike)
+        return text_format
+
+
+def _render_terminal_text(terminal: QPlainTextEdit, text: str) -> None:
+    """Render the read-only output pane with ANSI SGR colors and text styles."""
+    terminal.clear()
+    cursor = terminal.textCursor()
+    style = _TerminalStyle()
+    lines = text.split("\n")
+    for line_number, line in enumerate(lines):
+        offset = 0
+        for match in _SGR_SEQUENCE.finditer(line):
+            if offset < match.start():
+                cursor.insertText(line[offset : match.start()], style.format())
+            _apply_sgr(style, match.group(1))
+            offset = match.end()
+        if offset < len(line):
+            cursor.insertText(line[offset:], style.format())
+        if line_number < len(lines) - 1:
+            cursor.insertText("\n", style.format())
+    terminal.setTextCursor(cursor)
+    terminal.ensureCursorVisible()
+
+
+def _apply_sgr(style: _TerminalStyle, parameters: str) -> None:
+    codes = [int(value) if value else 0 for value in parameters.split(";")]
+    index = 0
+    while index < len(codes):
+        code = codes[index]
+        if code == 0:
+            style.reset()
+        elif code == 1:
+            style.bold = True
+        elif code == 2:
+            style.dim = True
+        elif code == 3:
+            style.italic = True
+        elif code == 4:
+            style.underline = True
+        elif code == 7:
+            style.inverse = True
+        elif code == 9:
+            style.strike = True
+        elif code in (22, 23, 24, 27, 29):
+            if code == 22:
+                style.bold = style.dim = False
+            elif code == 23:
+                style.italic = False
+            elif code == 24:
+                style.underline = False
+            elif code == 27:
+                style.inverse = False
+            else:
+                style.strike = False
+        elif 30 <= code <= 37:
+            style.foreground = QColor(_ANSI_COLORS[code - 30])
+        elif 90 <= code <= 97:
+            style.foreground = QColor(_ANSI_COLORS[code - 90 + 8])
+        elif code == 39:
+            style.foreground = QColor(_TERMINAL_FOREGROUND)
+        elif 40 <= code <= 47:
+            style.background = QColor(_ANSI_COLORS[code - 40])
+        elif 100 <= code <= 107:
+            style.background = QColor(_ANSI_COLORS[code - 100 + 8])
+        elif code == 49:
+            style.background = QColor(_TERMINAL_BACKGROUND)
+        elif code in (38, 48) and index + 1 < len(codes):
+            color, consumed = _extended_color(codes, index + 1)
+            if color is not None:
+                if code == 38:
+                    style.foreground = color
+                else:
+                    style.background = color
+            index += consumed
+        index += 1
+
+
+def _extended_color(codes: list[int], start: int) -> tuple[QColor | None, int]:
+    mode = codes[start]
+    if mode == 5 and start + 1 < len(codes):
+        return _ansi_256_color(codes[start + 1]), 2
+    if mode == 2 and start + 3 < len(codes):
+        red, green, blue = (min(255, max(0, value)) for value in codes[start + 1 : start + 4])
+        return QColor(red, green, blue), 4
+    return None, 1
+
+
+def _ansi_256_color(index: int) -> QColor:
+    index = min(255, max(0, index))
+    if index < 16:
+        return QColor(_ANSI_COLORS[index])
+    if index < 232:
+        value = index - 16
+        red, green, blue = value // 36, (value // 6) % 6, value % 6
+
+        def component(channel: int) -> int:
+            return 0 if channel == 0 else 55 + 40 * channel
+
+        return QColor(component(red), component(green), component(blue))
+    gray = 8 + 10 * (index - 232)
+    return QColor(gray, gray, gray)
 
 
 def _format_datetime(value: str | None) -> str:

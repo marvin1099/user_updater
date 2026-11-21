@@ -19,9 +19,13 @@ NOW = datetime(2026, 11, 15, 3, 0, tzinfo=ZoneInfo("UTC"))
 class FakeWorkflow:
     def __init__(self) -> None:
         self.calls = 0
+        self.progress_messages: tuple[str, ...] = ()
 
-    def run(self, on_output, _on_idle=None) -> WorkflowResult:
+    def run(self, on_output, _on_idle=None, *, on_progress=None) -> WorkflowResult:
         self.calls += 1
+        if on_progress is not None:
+            for line in self.progress_messages:
+                on_progress(line)
         on_output("fake topgrade completed")
         return WorkflowResult(0, None, ())
 
@@ -168,6 +172,38 @@ def test_manual_retry_starts_a_new_run_for_a_failed_task(tmp_path: Path) -> None
     assert retried.started_at == NOW.isoformat()
     assert retried.next_scheduled_at == (NOW + timedelta(hours=24)).isoformat()
     assert retried.last_output == ("fake topgrade completed",)
+
+
+def test_run_now_bypasses_schedule_and_replaces_progress_in_the_saved_output(
+    tmp_path: Path,
+) -> None:
+    store = StateStore(tmp_path / "system.json", file_mode=0o644)
+    store.save(
+        UpdateState(
+            phase="awaiting_response",
+            run_id="scheduled-run",
+            next_scheduled_at=(NOW + timedelta(days=1)).isoformat(),
+        )
+    )
+    workflow = FakeWorkflow()
+    workflow.progress_messages = ("Flatpak update 5%", "Flatpak update 100%")
+    service = UpdateService(
+        load_policy(),
+        store,
+        workflow,
+        task_id="system",
+        clock=lambda: NOW,
+        lock_file=tmp_path / "locks" / "system.lock",
+    )
+
+    action = service.run_now(NOW)
+
+    state = store.load()
+    assert action.value == "run"
+    assert workflow.calls == 1
+    assert state.phase == "succeeded"
+    assert state.run_id != "scheduled-run"
+    assert state.last_output == ("Flatpak update 100%", "fake topgrade completed")
 
 
 def test_manual_retry_is_refused_unless_the_latest_state_failed(tmp_path: Path) -> None:

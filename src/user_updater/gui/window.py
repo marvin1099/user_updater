@@ -41,7 +41,7 @@ class _TaskPanel(QWidget):
         self._run_id: str | None = None
 
         self.status = QLabel(f"{title}: waiting")
-        self.status.setWordWrap(True)
+        self.status.setWordWrap(False)
         self.countdown = QLabel("")
         self.defer_choice = QComboBox()
         self.defer_button = QPushButton("Reschedule")
@@ -69,12 +69,9 @@ class _TaskPanel(QWidget):
         if state.phase != "awaiting_response":
             self._request_sent = False
 
-        self.status.setText(
-            f"{self.title}: {state.phase.replace('_', ' ').title()} — {state.message}"
-        )
-        show_panel = (
-            state.phase != "idle" or bool(state.last_output) or state.next_scheduled_at is not None
-        )
+        self.status.setText(f"{self.title}: {state.phase.replace('_', ' ').title()}")
+        self.status.setToolTip(state.message)
+        show_panel = state.phase != "idle" or bool(state.last_output)
         self.setVisible(show_panel)
         response_open = state.phase == "awaiting_response"
         self.countdown.setVisible(response_open)
@@ -173,7 +170,8 @@ class UpdaterWindow(QWidget):
             | Qt.WindowType.Tool
         )
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
-        self.setFixedSize(540, 350 if self.system_state_store is not None else 250)
+        self.setFixedWidth(540)
+        self.setMinimumHeight(180)
         self.setStyleSheet(
             "QWidget { background: #20242b; color: #f2f4f8; }"
             "QLabel#heading { font-size: 16px; font-weight: 700; }"
@@ -323,13 +321,21 @@ class UpdaterWindow(QWidget):
                 if completed
                 else "System updater"
             )
-            self.message.setText(
-                errors[0].message
-                if errors
-                else completed[0].message
-                if completed
-                else "Waiting for the next scheduled update."
-            )
+            if errors:
+                noun = "task" if len(errors) == 1 else "tasks"
+                self.message.setText(
+                    f"{len(errors)} update {noun} failed. Open Full details to review the output."
+                )
+            elif completed:
+                self.message.setText("Enabled updates completed successfully.")
+            else:
+                self.message.setText("Waiting for the next scheduled update.")
+
+        response_count = sum(state.phase == "awaiting_response" for state in states.values())
+        visible_count = sum(
+            state.phase != "idle" or bool(state.last_output) for state in states.values()
+        )
+        self.setFixedHeight(max(180, min(350, 150 + 38 * visible_count + 45 * response_count)))
 
         self.close_button.setVisible(self._phase in {"deferred", "succeeded", "failed"})
         if self._phase == "idle":

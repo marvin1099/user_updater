@@ -18,10 +18,13 @@ The application does not install operating-system packages for you. Install `top
 
 ### Machine-wide (administrator)
 
-From a trusted checkout of this repository, install the Python application system-wide and then create its systemd integration:
+From a trusted checkout of this repository, install the Python application system-wide and then create its systemd integration. `uv tool install` has no `--system` option; these variables place the isolated environment under `/opt` and its executable in `/usr/local/bin`:
 
 ```console
-sudo uv tool install --system .
+sudo env \
+  UV_TOOL_DIR=/opt/user-updater/uv-tools \
+  UV_TOOL_BIN_DIR=/usr/local/bin \
+  uv tool install .
 sudo user-updater install --system
 ```
 
@@ -66,10 +69,10 @@ Default behavior:
 - Personal-tool reschedule choices: 1, 4, or 24 hours; at most two reschedules per scheduled run.
 - Automatic retries: up to 2 additional attempts per scheduled run, 15 minutes apart, independently for system updates and personal tools.
 - User-requested retries: disabled by default for both task types. Administrators can allow 0–5 per scheduled run; system retry requests always go through polkit.
-- System updates run through `topgrade` under a short-lived, non-login builder account. The updater creates a private `~/.config/topgrade.toml` for that account with `[misc] assume_yes = true` (the [documented Topgrade option](https://github.com/topgrade-rs/topgrade/blob/main/config.example.toml)), so the scheduled run does not wait for interactive confirmations. The user's Topgrade config is not reused. By default, the builder's passwordless sudo rule is limited to the detected native package-manager executable.
+- System updates run through Topgrade's `system` and `flatpak` steps under a short-lived, non-login builder account; the system Flatpak installation is updated with sudo, while unrelated Topgrade steps such as containers are not run as that builder. The updater creates a private `~/.config/topgrade.toml` with `[misc] assume_yes = true` and `[flatpak] use_sudo = true`, and invokes Topgrade with `--only system flatpak`. The user's Topgrade config is not reused. By default, the builder's passwordless sudo rule is limited to the detected native system-update executable (including Garuda's `garuda-update` wrapper when present) and the installed Flatpak CLI.
 - Active local graphical users can have their configured per-user tools updated separately, without administrator privileges. Their state is stored independently by UID.
 - The administrator's `updates.user_tools` list is the hard allow-list for personal tools. Users may opt out of individual allowed tools; all allowed tools start selected until a user saves preferences. Administrators can disable personal-tool updates entirely with `updates.run_user_tools: false`.
-- Built-in user tools are followed by executable custom hooks from `~/.config/user_updater/tools.d`. Hooks run as their owner, never as root; the administrator can disable hooks with `updates.allow_custom_user_tools: false`.
+- Built-in user tools can be followed by executable custom hooks from `~/.config/user_updater/tools.d`. Users can enable or disable these scripts in **Full details → User tools**; the administrator can disable them globally with `updates.allow_custom_user_tools: false`. Scripts run as their owner, never as root.
 
 Retry policy is configured independently under `retry.system` and `retry.user_tools`. Each section accepts `automatic_attempts` (0–5), `delay_minutes` (1–1440), and `user_manual_attempts` (0–5). Set `interaction.allow_deferral: false` to remove rescheduling while retaining the response window; it applies to personal-tool updates. Users cannot defer or start machine-wide system updates, which proceed according to administrator policy. `interaction.deferral_options_hours` and `interaction.max_deferrals_per_run` can further limit personal-tool rescheduling. `security.builder_sudo_mode: unrestricted` grants the temporary builder unrestricted passwordless sudo for the duration of the run; the default is the restricted `package-manager` mode.
 
@@ -88,6 +91,7 @@ The minimal desktop view shows machine-wide system updates without controls. In 
 | Command | Purpose |
 | --- | --- |
 | `user-updater status --system` | Show machine-wide update state |
+| `user-updater run-now --system` | Start machine-wide system updates immediately after polkit authorization |
 | `user-updater retry --system` | Retry a failed machine-wide run after polkit authorization |
 | `user-updater history --system` | Show recent system and per-user run summaries |
 | `user-updater logs --system` | Print machine-wide logs (root only); add `--output FILE` to export |

@@ -6,6 +6,7 @@ import fcntl
 import os
 import pwd
 import stat
+import time
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -17,6 +18,7 @@ from .coordinator import TickAction, UpdateCoordinator
 from .history import HistoryError, RunHistoryStore, history_path_for_state
 from .policy import Policy, TaskRetryPolicy
 from .requests import UserRequest, load_request, request_path, task_request_path
+from .runner import strip_ansi
 from .schedule import local_timezone
 from .state import StateError, StateStore
 from .workflow import WorkflowResult
@@ -29,7 +31,13 @@ class RequestHome:
 
 
 class Workflow(Protocol):
-    def run(self, on_output: Callable[[str], None], on_idle=None) -> WorkflowResult: ...
+    def run(
+        self,
+        on_output: Callable[[str], None],
+        on_idle=None,
+        *,
+        on_progress: Callable[[str], None] | None = None,
+    ) -> WorkflowResult: ...
 
 
 class UpdateService:
@@ -73,29 +81,21 @@ class UpdateService:
         )
 
     def tick(self, now: datetime | None = None) -> TickAction:
-        if self.lock_file is None:
-            return self._tick_locked(now)
-
-        self.lock_file.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        flags = os.O_CREAT | os.O_RDWR | os.O_CLOEXEC
-        if hasattr(os, "O_NOFOLLOW"):
-            flags |= os.O_NOFOLLOW
-        descriptor = os.open(self.lock_file, flags, 0o600)
-        try:
-            try:
-                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                return TickAction.WORKER_ALREADY_ACTIVE
-            return self._tick_locked(now)
-        finally:
-            os.close(descriptor)
+        return self._with_worker_lock(lambda: self._tick_locked(now))
 
     def retry_failed(self, now: datetime | None = None) -> TickAction:
         """Run a failed task again immediately; callers enforce authorization."""
         current = now or self.clock()
-        if self.lock_file is None:
-            return self._retry_failed_locked(current)
+        return self._with_worker_lock(lambda: self._retry_failed_locked(current))
 
+    def run_now(self, now: datetime | None = None) -> TickAction:
+        """Start a fresh update immediately; callers enforce administrator authorization."""
+        current = now or self.clock()
+        return self._with_worker_lock(lambda: self._run_now_locked(current))
+
+    def _with_worker_lock(self, operation: Callable[[], TickAction]) -> TickAction:
+        if self.lock_file is None:
+            return operation()
         self.lock_file.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         flags = os.O_CREAT | os.O_RDWR | os.O_CLOEXEC
         if hasattr(os, "O_NOFOLLOW"):
@@ -106,9 +106,20 @@ class UpdateService:
                 fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
                 return TickAction.WORKER_ALREADY_ACTIVE
-            return self._retry_failed_locked(current)
+            return operation()
         finally:
             os.close(descriptor)
+
+    def _run_now_locked(self, now: datetime) -> TickAction:
+        if self.state_store.load().phase == "running":
+            action = self.coordinator.tick(now)
+            if action is TickAction.RECOVERED_INTERRUPTED_RUN:
+                self.on_log(self.state_store.load().message)
+                self._record_history()
+            return action
+        action = self.coordinator.run_now(now)
+        self.on_log("An administrator started machine-wide updates immediately.")
+        return self._run_workflow(action)
 
     def _tick_locked(self, now: datetime | None) -> TickAction:
         current = now or self.clock()
@@ -142,11 +153,27 @@ class UpdateService:
 
     def _run_workflow(self, action: TickAction) -> TickAction:
         tail: deque[str] = deque(maxlen=200)
+        progress_active = False
+        last_progress_write = 0.0
 
         def on_output(line: str) -> None:
+            nonlocal progress_active
+            progress_active = False
             tail.append(line)
             self.coordinator.record_output(tuple(tail))
-            self.on_log(line)
+            self.on_log(strip_ansi(line))
+
+        def on_progress(line: str) -> None:
+            nonlocal progress_active, last_progress_write
+            if progress_active and tail:
+                tail[-1] = line
+            else:
+                tail.append(line)
+            progress_active = True
+            now = time.monotonic()
+            if now - last_progress_write >= 0.25:
+                self.coordinator.record_output(tuple(tail))
+                last_progress_write = now
 
         def on_idle(seconds: float) -> None:
             message = f"Update is still running; no new output for {int(seconds)} seconds."
@@ -154,11 +181,12 @@ class UpdateService:
             self.on_log(message)
 
         try:
-            result = self.workflow.run(on_output, on_idle)
+            result = self.workflow.run(on_output, on_idle, on_progress=on_progress)
             returncode = result.returncode
         except Exception as exc:
             on_output(f"Update worker failed: {exc}")
             returncode = 1
+        self.coordinator.record_output(tuple(tail))
         self.coordinator.complete(returncode, self.clock())
         self._record_history()
         return action

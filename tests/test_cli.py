@@ -26,6 +26,13 @@ class _Logger:
         pass
 
 
+def test_run_now_command_requires_system_scope() -> None:
+    args = cli.build_parser().parse_args(["run-now", "--system"])
+
+    assert args.command == "run-now"
+    assert args.system is True
+
+
 def test_system_and_per_user_jobs_are_independent_and_tick_in_parallel(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -99,18 +106,20 @@ updates:
     )
     preference_path = preferences.path
     preference_path.parent.mkdir(parents=True)
-    # Simulate a saved choice from before the administrator removed cargo.
+    # Simulate saved choices from before the administrator removed cargo.
     preference_path.write_text(
-        json.dumps({"version": 1, "tools": ["flatpak", "cargo"]}),
+        json.dumps({"version": 1, "tools": ["flatpak", "cargo"], "custom_tools": False}),
         encoding="utf-8",
     )
     preference_path.chmod(0o600)
     user = DesktopUser("alice", os.getuid(), os.getgid(), home, runtime)
-    observed: list[tuple[str, ...]] = []
+    observed: list[tuple[tuple[str, ...], bool]] = []
 
     class PreferenceService:
         def __init__(self, policy, *_args, **_kwargs) -> None:
-            observed.append(policy.updates.user_tools)
+            observed.append(
+                (policy.updates.user_tools, policy.updates.allow_custom_user_tools)
+            )
 
         def tick(self) -> TickAction:
             return TickAction.NOT_DUE
@@ -124,7 +133,7 @@ updates:
     result = cli._tick(system_mode=True)
 
     assert result == 0
-    assert observed == [("flatpak",)]
+    assert observed == [(("flatpak",), False)]
 
 
 def test_history_command_shows_recent_personal_tool_runs(
@@ -421,3 +430,8 @@ def test_system_status_does_not_treat_user_history_as_state(
     assert output.count("user-tool updates:") == 1
     assert "user-tool updates: succeeded" in output
     assert "unknown state field" not in output
+
+
+def test_untrusted_system_install_error_shows_supported_uv_command() -> None:
+    with pytest.raises(RuntimeError, match="UV_TOOL_DIR=/opt/user-updater/uv-tools"):
+        cli._require_trusted_system_install(Path(__file__))

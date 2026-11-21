@@ -6,11 +6,18 @@ import json
 import os
 import stat
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 _USER_TOOLS = frozenset({"flatpak", "pipx", "pip", "npm", "cargo", "gem"})
 _MAX_FILE_BYTES = 4096
+
+
+@dataclass(frozen=True)
+class UserToolPreferences:
+    tools: tuple[str, ...]
+    custom_tools: bool
 
 
 class ToolPreferenceError(ValueError):
@@ -25,6 +32,15 @@ class UserToolPreferenceStore:
         self.owner_uid = owner_uid
 
     def load(self, admin_allowed: tuple[str, ...]) -> tuple[str, ...]:
+        return self.load_all(admin_allowed).tools
+
+    def load_all(
+        self,
+        admin_allowed: tuple[str, ...],
+        *,
+        admin_allows_custom: bool = True,
+    ) -> UserToolPreferences:
+        """Load per-user choices, bounded by the current administrator policy."""
         allowed = _validate_tool_list(admin_allowed, "administrator tool list")
         try:
             flags = os.O_RDONLY | os.O_CLOEXEC
@@ -39,7 +55,7 @@ class UserToolPreferenceStore:
                     raise ToolPreferenceError("tool preferences file is too large")
                 content = stream.read(_MAX_FILE_BYTES + 1)
         except FileNotFoundError:
-            return allowed
+            return UserToolPreferences(allowed, admin_allows_custom)
         except OSError as exc:
             raise ToolPreferenceError(f"cannot read tool preferences {self.path}: {exc}") from exc
 
@@ -53,22 +69,33 @@ class UserToolPreferenceStore:
             not isinstance(raw, dict)
             or type(raw.get("version")) is not int
             or raw.get("version") != 1
-            or set(raw) != {"version", "tools"}
+            or set(raw) not in ({"version", "tools"}, {"version", "tools", "custom_tools"})
         ):
             raise ToolPreferenceError("tool preferences must contain version 1 and a tools list")
         selected = _validate_tool_list(raw["tools"], "user tool list")
         selected_set = set(selected)
-        return tuple(tool for tool in allowed if tool in selected_set)
+        custom_tools = raw.get("custom_tools", True)
+        if not isinstance(custom_tools, bool):
+            raise ToolPreferenceError("custom_tools preference must be true or false")
+        return UserToolPreferences(
+            tuple(tool for tool in allowed if tool in selected_set),
+            admin_allows_custom and custom_tools,
+        )
 
     def save(
         self,
         selected_tools: tuple[str, ...],
         admin_allowed: tuple[str, ...],
+        *,
+        custom_tools: bool = True,
+        admin_allows_custom: bool = True,
     ) -> tuple[str, ...]:
         if os.getuid() != self.owner_uid:
             raise ToolPreferenceError("only the owning user may change personal tool preferences")
         allowed = _validate_tool_list(admin_allowed, "administrator tool list")
         selected = _validate_tool_list(selected_tools, "user tool list")
+        if not isinstance(custom_tools, bool) or not isinstance(admin_allows_custom, bool):
+            raise ToolPreferenceError("custom tool preferences must be true or false")
         if not set(selected).issubset(allowed):
             raise ToolPreferenceError("users cannot enable tools disabled by administrator policy")
 
@@ -84,7 +111,15 @@ class UserToolPreferenceStore:
             ) as stream:
                 temporary_path = Path(stream.name)
                 os.fchmod(stream.fileno(), 0o600)
-                json.dump({"version": 1, "tools": list(selected)}, stream, separators=(",", ":"))
+                json.dump(
+                    {
+                        "version": 1,
+                        "tools": list(selected),
+                        "custom_tools": admin_allows_custom and custom_tools,
+                    },
+                    stream,
+                    separators=(",", ":"),
+                )
                 stream.write("\n")
                 stream.flush()
                 os.fsync(stream.fileno())
