@@ -332,20 +332,27 @@ class BuilderAccountManager:
         manager = self.backend.package_manager
         if manager is None:
             raise RuntimeError("no supported system package manager was detected")
-        commands = [manager]
+        if manager == "/usr/bin/garuda-update":
+            # Paru builds as the temporary user, then uses pacman to install
+            # dependencies and built packages. Do not grant unrelated pacman
+            # operations such as package removal or database maintenance.
+            command_specs = [
+                manager,
+                f"{manager} *",
+                "/usr/bin/pacman -S *",
+                "/usr/bin/pacman -U *",
+            ]
+        else:
+            command_specs = [manager, f"{manager} *"]
         flatpak = self.backend.flatpak
-        if flatpak is not None and flatpak not in commands:
-            commands.append(flatpak)
-        allowed_commands = ", ".join(
-            spec for command in commands for spec in (command, f"{command} *")
-        )
+        if flatpak is not None:
+            command_specs.extend((flatpak, f"{flatpak} *"))
+        allowed_commands = ", ".join(command_specs)
         environment_policy = ""
         if manager == "/usr/bin/garuda-update":
-            # Topgrade sets these exact flags when invoking Garuda's root wrapper.
-            # Keep the exception command-scoped and value-scoped; SETENV would
-            # permit arbitrary environment overrides for a privileged command.
+            # Keep Garuda's mirrorlist override command-scoped and value-scoped;
+            # SETENV would permit arbitrary environment overrides.
             environment_policy = (
-                'Defaults!/usr/bin/garuda-update env_check += '
-                '"SKIP_MIRRORLIST=1 UPDATE_AUR=1"\n'
+                'Defaults!/usr/bin/garuda-update env_check += "SKIP_MIRRORLIST=1"\n'
             )
         return environment_policy + f"{name} ALL=(root) NOPASSWD: {allowed_commands}\n"

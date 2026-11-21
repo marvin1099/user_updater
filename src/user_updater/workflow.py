@@ -6,6 +6,7 @@ import os
 import shutil
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 from .accounts import BuilderAccount, BuilderAccountManager
 from .policy import Policy
@@ -118,25 +119,41 @@ class UpdateWorkflow:
             else:
                 self._write_topgrade_config(account)
                 environment = _builder_environment(account)
-                on_output(f"Running topgrade as temporary builder {account.name}.")
-                runner_options: dict[str, object] = {
-                    "on_output": on_output,
-                    "on_idle": on_idle,
-                    "env": environment,
-                    "cwd": account.home,
-                    "user_id": account.uid,
-                    "group_id": account.gid,
-                }
-                if on_progress is not None:
-                    runner_options["on_progress"] = on_progress
-                if on_progress_end is not None:
-                    runner_options["on_progress_end"] = on_progress_end
-                result = self.runner(
-                    [executable, "--cleanup", "--no-retry", "--only", "system", "flatpak"],
-                    **runner_options,
+                garuda_update = self.which(
+                    "garuda-update",
+                    path="/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin",
                 )
+                if garuda_update == "/usr/bin/garuda-update":
+                    aur_helper = self.which(
+                        "paru", path="/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
+                    ) or self.which(
+                        "yay", path="/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
+                    )
+                    result = self._run_garuda_updates(
+                        account,
+                        executable,
+                        garuda_update,
+                        aur_helper,
+                        environment,
+                        on_output,
+                        on_idle,
+                        on_progress,
+                        on_progress_end,
+                    )
+                else:
+                    on_output(f"Running topgrade as temporary builder {account.name}.")
+                    result = self._run_topgrade(
+                        account,
+                        executable,
+                        environment,
+                        ("system", "flatpak"),
+                        on_output,
+                        on_idle,
+                        on_progress,
+                        on_progress_end,
+                    )
                 if result.returncode != 0:
-                    on_output(f"topgrade exited with status {result.returncode}.")
+                    on_output(f"System update command exited with status {result.returncode}.")
         except (OSError, RuntimeError, ValueError) as exc:
             on_output(f"System update setup failed: {exc}")
             result = CommandResult(1, 0.0, False, ())
@@ -155,6 +172,105 @@ class UpdateWorkflow:
                     )
         return result
 
+    def _run_garuda_updates(
+        self,
+        account: BuilderAccount,
+        topgrade: str,
+        garuda_update: str,
+        aur_helper: str | None,
+        environment: dict[str, str],
+        on_output: Output,
+        on_idle: Callable[[float], None] | None,
+        on_progress: Progress | None,
+        on_progress_end: ProgressEnd | None,
+    ) -> CommandResult:
+        """Run Garuda's system update separately from unattended AUR upgrades."""
+        results: list[CommandResult] = []
+        common_options: dict[str, object] = {
+            "on_output": on_output,
+            "on_idle": on_idle,
+            "cwd": account.home,
+            "user_id": account.uid,
+            "group_id": account.gid,
+        }
+        if on_progress is not None:
+            common_options["on_progress"] = on_progress
+        if on_progress_end is not None:
+            common_options["on_progress_end"] = on_progress_end
+
+        on_output("Running Garuda system updates as the temporary builder.")
+        garuda_environment = {**environment, "SKIP_MIRRORLIST": "1"}
+        system_result = self.runner(
+            [garuda_update, "--noconfirm"],
+            env=garuda_environment,
+            **common_options,
+        )
+        results.append(system_result)
+
+        if system_result.returncode == 0 and aur_helper is not None:
+            on_output(f"Updating AUR packages with {Path(aur_helper).name} (--noconfirm).")
+            results.append(
+                self.runner(
+                    [aur_helper, "-Sua", "--noconfirm"],
+                    env=environment,
+                    **common_options,
+                )
+            )
+        elif system_result.returncode == 0:
+            on_output("No supported AUR helper found; skipping AUR package updates.")
+        else:
+            on_output("Skipping AUR updates because the Garuda system update failed.")
+
+        on_output("Running Topgrade Flatpak updates.")
+        results.append(
+            self._run_topgrade(
+                account,
+                topgrade,
+                environment,
+                ("flatpak",),
+                on_output,
+                on_idle,
+                on_progress,
+                on_progress_end,
+            )
+        )
+        return _combine_results(results)
+
+    def _run_topgrade(
+        self,
+        account: BuilderAccount,
+        executable: str,
+        environment: dict[str, str],
+        steps: tuple[str, ...],
+        on_output: Output,
+        on_idle: Callable[[float], None] | None,
+        on_progress: Progress | None,
+        on_progress_end: ProgressEnd | None,
+    ) -> CommandResult:
+        on_output(f"Running topgrade as temporary builder {account.name}.")
+        options: dict[str, object] = {
+            "on_output": on_output,
+            "on_idle": on_idle,
+            "env": environment,
+            "cwd": account.home,
+            "user_id": account.uid,
+            "group_id": account.gid,
+        }
+        if on_progress is not None:
+            options["on_progress"] = on_progress
+        if on_progress_end is not None:
+            options["on_progress_end"] = on_progress_end
+        return self.runner(
+            [
+                executable,
+                "--cleanup",
+                "--no-retry",
+                "--only",
+                *steps,
+            ],
+            **options,
+        )
+
     @staticmethod
     def _write_topgrade_config(account: BuilderAccount) -> None:
         # Seed the temporary home before Topgrade's first-run config prompt can block.
@@ -164,10 +280,6 @@ class UpdateWorkflow:
         config_file.write_text(
             "[misc]\n"
             "assume_yes = true\n\n"
-            "[linux]\n"
-            # Garuda's wrapper re-enters itself through sudo and drops the
-            # PACMAN_NOCONFIRM environment flag Topgrade otherwise supplies.
-            'garuda_update_arguments = "--noconfirm"\n\n'
             "[flatpak]\n"
             "use_sudo = true\n",
             encoding="utf-8",
@@ -189,3 +301,13 @@ def _builder_environment(account: BuilderAccount) -> dict[str, str]:
         "LANG": "C.UTF-8",
         "TMPDIR": "/tmp",
     }
+
+
+def _combine_results(results: list[CommandResult]) -> CommandResult:
+    output_tail = tuple(line for result in results for line in result.output_tail)[-200:]
+    return CommandResult(
+        returncode=next((result.returncode for result in results if result.returncode != 0), 0),
+        duration_seconds=sum(result.duration_seconds for result in results),
+        cancelled=any(result.cancelled for result in results),
+        output_tail=output_tail,
+    )

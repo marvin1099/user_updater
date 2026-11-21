@@ -102,9 +102,10 @@ def test_temporary_builder_sudoers_allows_garuda_update_wrapper(tmp_path: Path) 
 
     sudoers = backend.sudoers[account.sudoers_path]
     assert sudoers.splitlines() == [
-        'Defaults!/usr/bin/garuda-update env_check += "SKIP_MIRRORLIST=1 UPDATE_AUR=1"',
+        'Defaults!/usr/bin/garuda-update env_check += "SKIP_MIRRORLIST=1"',
         f"{account.name} ALL=(root) NOPASSWD: /usr/bin/garuda-update, "
-        "/usr/bin/garuda-update *, /usr/bin/flatpak, /usr/bin/flatpak *",
+        "/usr/bin/garuda-update *, /usr/bin/pacman -S *, /usr/bin/pacman -U *, "
+        "/usr/bin/flatpak, /usr/bin/flatpak *",
     ]
     assert "SETENV" not in sudoers
 
