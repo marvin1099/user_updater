@@ -36,6 +36,7 @@ def test_topgrade_runs_as_the_temporary_builder_and_is_cleaned(tmp_path: Path) -
     config.write_text("version: 1\nupdates:\n  run_user_tools: false\n", encoding="utf-8")
     manager = FakeBuilderManager(tmp_path / "builders")
     calls: list[tuple[list[str], dict[str, object]]] = []
+    progress_ends: list[None] = []
     topgrade_config = manager.account.home / ".config" / "topgrade.toml"
     assert not topgrade_config.exists()
 
@@ -53,6 +54,8 @@ def test_topgrade_runs_as_the_temporary_builder_and_is_cleaned(tmp_path: Path) -
         assert config_stat.st_uid == manager.account.uid
         assert config_stat.st_gid == manager.account.gid
         calls.append((command, kwargs))
+        if "on_progress_end" in kwargs:
+            kwargs["on_progress_end"]()
         kwargs["on_output"]("Packages updated")
         return CommandResult(0, 3.0, False, ("Packages updated",))
 
@@ -65,7 +68,10 @@ def test_topgrade_runs_as_the_temporary_builder_and_is_cleaned(tmp_path: Path) -
     )
     output: list[str] = []
 
-    result = workflow.run(output.append)
+    result = workflow.run(
+        output.append,
+        on_progress_end=lambda: progress_ends.append(None),
+    )
 
     assert result.returncode == 0
     assert calls[0][0] == [
@@ -80,6 +86,7 @@ def test_topgrade_runs_as_the_temporary_builder_and_is_cleaned(tmp_path: Path) -
     assert calls[0][1]["group_id"] == manager.account.gid
     assert calls[0][1]["env"]["HOME"] == str(manager.account.home)
     assert calls[0][1]["env"]["XDG_CONFIG_HOME"] == str(topgrade_config.parent)
+    assert progress_ends == [None]
     assert manager.removed == [manager.account]
     assert "Packages updated" in output
 

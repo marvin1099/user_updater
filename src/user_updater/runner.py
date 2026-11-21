@@ -57,6 +57,7 @@ def run_command(
     *,
     on_output: Callable[[str], None],
     on_progress: Callable[[str], None] | None = None,
+    on_progress_end: Callable[[], None] | None = None,
     on_idle: Callable[[float], None] | None = None,
     env: Mapping[str, str] | None = None,
     cwd: Path | None = None,
@@ -150,9 +151,12 @@ def run_command(
                     emit(pending, progress=True)
                     pending = ""
             elif character == "\n":
+                ended_progress = progress_active
                 if pending:
                     emit(pending, progress=progress_active)
                     pending = ""
+                if ended_progress and on_progress_end is not None:
+                    on_progress_end()
                 progress_active = False
             else:
                 pending += character
@@ -160,9 +164,12 @@ def run_command(
                     emit(pending[:_MAX_UNTERMINATED_LINE], progress=progress_active)
                     pending = pending[_MAX_UNTERMINATED_LINE:]
         if final:
+            ended_progress = progress_active
             if pending:
                 emit(pending, progress=progress_active)
                 pending = ""
+            if ended_progress and on_progress_end is not None:
+                on_progress_end()
             progress_active = False
 
     try:

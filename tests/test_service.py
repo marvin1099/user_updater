@@ -20,12 +20,25 @@ class FakeWorkflow:
     def __init__(self) -> None:
         self.calls = 0
         self.progress_messages: tuple[str, ...] = ()
+        self.progress_batches: tuple[tuple[str, ...], ...] = ()
 
-    def run(self, on_output, _on_idle=None, *, on_progress=None) -> WorkflowResult:
+    def run(
+        self,
+        on_output,
+        _on_idle=None,
+        *,
+        on_progress=None,
+        on_progress_end=None,
+    ) -> WorkflowResult:
         self.calls += 1
         if on_progress is not None:
             for line in self.progress_messages:
                 on_progress(line)
+            for batch in self.progress_batches:
+                for line in batch:
+                    on_progress(line)
+                if on_progress_end is not None:
+                    on_progress_end()
         on_output("fake topgrade completed")
         return WorkflowResult(0, None, ())
 
@@ -204,6 +217,27 @@ def test_run_now_bypasses_schedule_and_replaces_progress_in_the_saved_output(
     assert state.phase == "succeeded"
     assert state.run_id != "scheduled-run"
     assert state.last_output == ("Flatpak update 100%", "fake topgrade completed")
+
+
+def test_service_keeps_distinct_completed_progress_lines(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "system.json", file_mode=0o644)
+    workflow = FakeWorkflow()
+    workflow.progress_batches = (("package A 100%",), ("package B 100%",))
+    service = UpdateService(
+        load_policy(),
+        store,
+        workflow,
+        task_id="system",
+        clock=lambda: NOW,
+    )
+
+    service.run_now(NOW)
+
+    assert store.load().last_output == (
+        "package A 100%",
+        "package B 100%",
+        "fake topgrade completed",
+    )
 
 
 def test_manual_retry_is_refused_unless_the_latest_state_failed(tmp_path: Path) -> None:

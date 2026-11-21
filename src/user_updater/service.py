@@ -37,6 +37,7 @@ class Workflow(Protocol):
         on_idle=None,
         *,
         on_progress: Callable[[str], None] | None = None,
+        on_progress_end: Callable[[], None] | None = None,
     ) -> WorkflowResult: ...
 
 
@@ -175,13 +176,24 @@ class UpdateService:
                 self.coordinator.record_output(tuple(tail))
                 last_progress_write = now
 
+        def on_progress_end() -> None:
+            nonlocal progress_active
+            if progress_active:
+                progress_active = False
+                self.coordinator.record_output(tuple(tail))
+
         def on_idle(seconds: float) -> None:
             message = f"Update is still running; no new output for {int(seconds)} seconds."
             self.coordinator.record_output(tuple(tail), message)
             self.on_log(message)
 
         try:
-            result = self.workflow.run(on_output, on_idle, on_progress=on_progress)
+            result = self.workflow.run(
+                on_output,
+                on_idle,
+                on_progress=on_progress,
+                on_progress_end=on_progress_end,
+            )
             returncode = result.returncode
         except Exception as exc:
             on_output(f"Update worker failed: {exc}")

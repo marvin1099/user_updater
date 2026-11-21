@@ -17,6 +17,7 @@ Runner = Callable[..., CommandResult]
 Which = Callable[..., str | None]
 Output = Callable[[str], None]
 Progress = Callable[[str], None]
+ProgressEnd = Callable[[], None]
 
 
 @dataclass(frozen=True)
@@ -51,13 +52,16 @@ class UpdateWorkflow:
         on_idle: Callable[[float], None] | None = None,
         *,
         on_progress: Progress | None = None,
+        on_progress_end: ProgressEnd | None = None,
     ) -> WorkflowResult:
         failed = False
         system_result: CommandResult | None = None
         user_results: list[tuple[str, ToolResult]] = []
 
         if self.policy.updates.run_system:
-            system_result = self._run_system_update(on_output, on_idle, on_progress)
+            system_result = self._run_system_update(
+                on_output, on_idle, on_progress, on_progress_end
+            )
             failed = system_result.returncode != 0
 
         if self.policy.updates.run_user_tools:
@@ -77,6 +81,7 @@ class UpdateWorkflow:
                         if on_progress is not None
                         else None
                     ),
+                    on_progress_end=on_progress_end,
                 )
                 for result in results:
                     user_results.append((user.username, result))
@@ -94,6 +99,7 @@ class UpdateWorkflow:
         on_output: Output,
         on_idle: Callable[[float], None] | None,
         on_progress: Progress | None,
+        on_progress_end: ProgressEnd | None,
     ) -> CommandResult:
         account: BuilderAccount | None = None
         result = CommandResult(1, 0.0, False, ())
@@ -123,6 +129,8 @@ class UpdateWorkflow:
                 }
                 if on_progress is not None:
                     runner_options["on_progress"] = on_progress
+                if on_progress_end is not None:
+                    runner_options["on_progress_end"] = on_progress_end
                 result = self.runner(
                     [executable, "--cleanup", "--no-retry", "--only", "system", "flatpak"],
                     **runner_options,

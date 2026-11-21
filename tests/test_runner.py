@@ -22,6 +22,7 @@ def test_runner_streams_output_and_preserves_child_exit_code() -> None:
 def test_runner_reports_carriage_return_progress_as_replacements_and_strips_ansi() -> None:
     output: list[str] = []
     progress: list[str] = []
+    progress_ends: list[None] = []
 
     result = run_command(
         [
@@ -33,13 +34,37 @@ def test_runner_reports_carriage_return_progress_as_replacements_and_strips_ansi
         ],
         on_output=output.append,
         on_progress=progress.append,
+        on_progress_end=lambda: progress_ends.append(None),
         poll_interval=0.02,
     )
 
     assert result.returncode == 0
     assert progress == ["Download 10%", "Download 60%", "Download 100%"]
+    assert progress_ends == [None]
     assert output == ["Done"]
     assert result.output_tail == ("Download 100%", "Done")
+
+
+def test_runner_ends_progress_when_the_process_reaches_eof() -> None:
+    progress: list[str] = []
+    progress_ends: list[None] = []
+
+    result = run_command(
+        [
+            sys.executable,
+            "-c",
+            "import sys; sys.stdout.write('Download 100%\\r'); sys.stdout.flush()",
+        ],
+        on_output=lambda _line: None,
+        on_progress=progress.append,
+        on_progress_end=lambda: progress_ends.append(None),
+        poll_interval=0.02,
+    )
+
+    assert result.returncode == 0
+    assert progress == ["Download 100%"]
+    assert progress_ends == [None]
+    assert result.output_tail == ("Download 100%",)
 
 
 def test_runner_keeps_regular_newlines_separate_from_progress() -> None:
