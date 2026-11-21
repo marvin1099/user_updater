@@ -370,12 +370,6 @@ def start_system_update_now(parent: QWidget) -> None:
     started, _pid = QProcess.startDetached(pkexec, [helper, "run-now"])
     if not started:
         QMessageBox.warning(parent, "System updates", "Could not start pkexec.")
-        return
-    QMessageBox.information(
-        parent,
-        "System updates",
-        "Machine-wide updates were started. Follow progress in Full details.",
-    )
 
 
 def _spin(value: int, minimum: int, maximum: int) -> QSpinBox:
@@ -405,10 +399,7 @@ def _trusted_system_executable() -> str:
 
 def _trusted_admin_helper() -> str:
     """Resolve the dedicated root-owned helper covered by the app's polkit action."""
-    located = shutil.which("user-updater-admin")
-    if located is None:
-        raise RuntimeError("user-updater-admin is required for administrator actions")
-    executable_path = Path(located).absolute()
+    executable_path = _admin_helper_path()
     candidate = executable_path.resolve(strict=True)
     installed_module = Path(__file__).resolve(strict=True)
     for installed_file in (candidate, installed_module):
@@ -420,3 +411,12 @@ def _trusted_admin_helper() -> str:
                 )
     # Preserve the installed entry-point path: polkit matches the path passed to pkexec.
     return str(executable_path)
+
+
+def _admin_helper_path() -> Path:
+    """Use the helper beside the GUI's entry point so its path matches the polkit rule."""
+    executable = Path(sys.argv[0])
+    if not executable.is_absolute():
+        located = shutil.which(str(executable))
+        executable = Path(located) if located is not None else Path.cwd() / executable
+    return executable.absolute().with_name("user-updater-admin")

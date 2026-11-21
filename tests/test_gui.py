@@ -231,6 +231,7 @@ def test_admin_run_now_button_starts_the_authorized_system_command(monkeypatch) 
     _application()
     dialog = AdminSettingsDialog(load_policy())
     commands: list[tuple[str, list[str]]] = []
+    information_calls: list[tuple[object, ...]] = []
     monkeypatch.setattr(
         admin_gui, "_trusted_admin_helper", lambda: "/usr/local/bin/user-updater-admin"
     )
@@ -244,14 +245,29 @@ def test_admin_run_now_button_starts_the_authorized_system_command(monkeypatch) 
         "startDetached",
         lambda executable, arguments: (commands.append((executable, arguments)) or True, 1234),
     )
-    monkeypatch.setattr(admin_gui.QMessageBox, "information", lambda *_args: None)
+    monkeypatch.setattr(
+        admin_gui.QMessageBox,
+        "information",
+        lambda *args: information_calls.append(args),
+    )
 
     dialog.run_system_now_button.click()
 
     assert commands == [
         ("/usr/bin/pkexec", ["/usr/local/bin/user-updater-admin", "run-now"])
     ]
+    assert information_calls == []
     dialog.deleteLater()
+
+
+def test_admin_helper_path_matches_installed_gui_entrypoint(monkeypatch) -> None:
+    monkeypatch.setattr(
+        admin_gui.sys,
+        "argv",
+        ["/usr/local/bin/user-updater", "gui", "--system"],
+    )
+
+    assert admin_gui._admin_helper_path() == Path("/usr/local/bin/user-updater-admin")
 
 
 def test_admin_settings_and_run_action_share_the_cached_polkit_helper(
