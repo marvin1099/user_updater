@@ -2,6 +2,8 @@ import os
 import stat
 from pathlib import Path
 
+import pytest
+
 from user_updater.accounts import BuilderAccount
 from user_updater.policy import load_policy
 from user_updater.runner import CommandResult
@@ -76,9 +78,6 @@ def test_topgrade_runs_as_the_temporary_builder_and_is_cleaned(tmp_path: Path) -
         "/usr/bin/topgrade",
         "--cleanup",
         "--no-retry",
-        "--only",
-        "system",
-        "flatpak",
     ]
     assert calls[0][1]["user_id"] == manager.account.uid
     assert calls[0][1]["group_id"] == manager.account.gid
@@ -89,75 +88,86 @@ def test_topgrade_runs_as_the_temporary_builder_and_is_cleaned(tmp_path: Path) -
     assert "Packages updated" in output
 
 
-def test_garuda_updates_aur_with_noninteractive_paru_and_keeps_garuda_system_step(
-    tmp_path: Path,
-) -> None:
+def test_garuda_uses_full_topgrade_without_a_custom_paru_command(tmp_path: Path) -> None:
     config = tmp_path / "project.yaml"
     config.write_text("version: 1\nupdates:\n  run_user_tools: false\n", encoding="utf-8")
     manager = FakeBuilderManager(tmp_path / "builders")
     calls: list[tuple[list[str], dict[str, object]]] = []
+    which_calls: list[str] = []
 
     def runner(command: list[str], **kwargs: object) -> CommandResult:
         calls.append((command, kwargs))
         return CommandResult(0, 1.0, False, ())
 
-    executables = {
-        "topgrade": "/usr/bin/topgrade",
-        "garuda-update": "/usr/bin/garuda-update",
-        "paru": "/usr/bin/paru",
-    }
+    def which(name: str, path: str | None = None) -> str | None:
+        which_calls.append(name)
+        return "/usr/bin/topgrade" if name == "topgrade" else None
+
     workflow = UpdateWorkflow(
         policy=load_policy(config),
         builder_manager=manager,
         runner=runner,
-        which=lambda name, path=None: executables.get(name),
+        which=which,
         session_detector=lambda: [],
     )
 
     result = workflow.run(lambda _line: None)
 
     assert result.returncode == 0
-    assert [call[0] for call in calls] == [
-        ["/usr/bin/garuda-update", "--noconfirm"],
-        ["/usr/bin/paru", "-Sua", "--noconfirm"],
-        ["/usr/bin/topgrade", "--cleanup", "--no-retry", "--only", "flatpak"],
-    ]
-    garuda_environment = calls[0][1]["env"]
-    assert garuda_environment["SKIP_MIRRORLIST"] == "1"
-    assert "UPDATE_AUR" not in garuda_environment
-    assert calls[1][1]["user_id"] == manager.account.uid
+    assert [call[0] for call in calls] == [["/usr/bin/topgrade", "--cleanup", "--no-retry"]]
+    assert which_calls == ["topgrade"]
+    assert "assume_yes = true" in (
+        manager.account.home / ".config" / "topgrade.toml"
+    ).read_text(encoding="utf-8")
 
 
-def test_garuda_skips_aur_when_system_update_fails(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "existing_config",
+    [
+        "[misc]\nassume_yes = false\n",
+        "[misc]assume_yes = true\n",
+        "assume_yes = false\n",
+        "[misc]\nassume_yes = true\n",
+    ],
+)
+def test_topgrade_config_replaces_existing_or_malformed_config(
+    tmp_path: Path, existing_config: str
+) -> None:
     config = tmp_path / "project.yaml"
     config.write_text("version: 1\nupdates:\n  run_user_tools: false\n", encoding="utf-8")
     manager = FakeBuilderManager(tmp_path / "builders")
-    calls: list[list[str]] = []
+    topgrade_config = manager.account.home / ".config" / "topgrade.toml"
+    topgrade_config.parent.mkdir(parents=True)
+    topgrade_config.write_text(existing_config, encoding="utf-8")
+    expected_config = (
+        "[misc]\n"
+        "assume_yes = true\n\n"
+        "[flatpak]\n"
+        "use_sudo = true\n"
+    )
+    calls: list[tuple[list[str], dict[str, object]]] = []
 
-    def runner(command: list[str], **_kwargs: object) -> CommandResult:
-        calls.append(command)
-        return CommandResult(1 if command[0] == "/usr/bin/garuda-update" else 0, 1.0, False, ())
+    def runner(command: list[str], **kwargs: object) -> CommandResult:
+        calls.append((command, kwargs))
+        assert topgrade_config.read_text(encoding="utf-8") == expected_config
+        return CommandResult(0, 1.0, False, ())
 
-    executables = {
-        "topgrade": "/usr/bin/topgrade",
-        "garuda-update": "/usr/bin/garuda-update",
-        "paru": "/usr/bin/paru",
-    }
     workflow = UpdateWorkflow(
         policy=load_policy(config),
         builder_manager=manager,
         runner=runner,
-        which=lambda name, path=None: executables.get(name),
+        which=lambda name, path=None: "/usr/bin/topgrade" if name == "topgrade" else None,
         session_detector=lambda: [],
     )
 
     result = workflow.run(lambda _line: None)
 
-    assert result.returncode == 1
-    assert calls == [
-        ["/usr/bin/garuda-update", "--noconfirm"],
-        ["/usr/bin/topgrade", "--cleanup", "--no-retry", "--only", "flatpak"],
-    ]
+    assert result.returncode == 0
+    assert len(calls) == 1
+    environment = calls[0][1]["env"]
+    assert environment["HOME"] == str(manager.account.home)
+    assert environment["XDG_CONFIG_HOME"] == str(topgrade_config.parent)
+    assert topgrade_config.read_text(encoding="utf-8") == expected_config
 
 
 def test_missing_topgrade_fails_cleanly_and_still_removes_builder(tmp_path: Path) -> None:
