@@ -355,5 +355,6 @@ class BuilderAccountManager:
             environment_policy = (
                 'Defaults!/usr/bin/garuda-update env_check += "SKIP_MIRRORLIST=1"\n'
                 'Defaults!/usr/bin/garuda-update env_check += "UPDATE_AUR=1"\n'
+                'Defaults!/usr/bin/garuda-update env_check += "PACMAN_NOCONFIRM=1"\n'
             )
         return environment_policy + f"{name} ALL=(root) NOPASSWD: {allowed_commands}\n"
