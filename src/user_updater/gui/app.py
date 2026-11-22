@@ -57,6 +57,9 @@ def run_gui(system_mode: bool = False) -> int:
         user_tools_enabled=policy.updates.run_user_tools,
         user_request_file=user_request,
         log_file=paths.log_file,
+        user_log_file=(
+            paths.user_state_dir / f"{os.getuid()}.log" if system_mode else None
+        ),
         system_output_visible=True,
         system_manual_retry_limit=policy.retry.system.user_manual_attempts,
         user_manual_retry_limit=policy.retry.user_tools.user_manual_attempts,

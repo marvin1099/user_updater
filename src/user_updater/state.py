@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -87,9 +88,40 @@ class UpdateState:
 class StateStore:
     """Read and atomically replace one JSON state document."""
 
-    def __init__(self, path: Path, file_mode: int = 0o644) -> None:
+    def __init__(
+        self,
+        path: Path,
+        file_mode: int = 0o644,
+        *,
+        owner_uid: int | None = None,
+        owner_gid: int | None = None,
+    ) -> None:
         self.path = Path(path)
         self.file_mode = file_mode
+        self.owner_uid = owner_uid
+        self.owner_gid = owner_gid
+
+    def ensure_permissions(self) -> None:
+        """Apply this store's owner and mode to an existing state file."""
+        try:
+            flags = os.O_RDONLY | os.O_CLOEXEC
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            descriptor = os.open(self.path, flags)
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            raise StateError(f"cannot secure state {self.path}: {exc}") from exc
+        try:
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISREG(metadata.st_mode):
+                raise StateError(f"state path is not a regular file: {self.path}")
+            self._set_owner(descriptor)
+            os.fchmod(descriptor, self.file_mode)
+        except OSError as exc:
+            raise StateError(f"cannot secure state {self.path}: {exc}") from exc
+        finally:
+            os.close(descriptor)
 
     def load(self) -> UpdateState:
         try:
@@ -114,6 +146,7 @@ class StateStore:
                 delete=False,
             ) as stream:
                 temporary_path = Path(stream.name)
+                self._set_owner(stream.fileno())
                 os.fchmod(stream.fileno(), self.file_mode)
                 json.dump(payload, stream, ensure_ascii=False, sort_keys=True)
                 stream.write("\n")
@@ -129,3 +162,12 @@ class StateStore:
             if temporary_path is not None:
                 temporary_path.unlink(missing_ok=True)
             raise StateError(f"cannot write state {self.path}: {exc}") from exc
+
+    def _set_owner(self, descriptor: int) -> None:
+        if self.owner_uid is None and self.owner_gid is None:
+            return
+        os.fchown(
+            descriptor,
+            -1 if self.owner_uid is None else self.owner_uid,
+            -1 if self.owner_gid is None else self.owner_gid,
+        )

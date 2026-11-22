@@ -65,6 +65,8 @@ class UpdateService:
         response_minutes: int | None = None,
         history_store: RunHistoryStore | None = None,
         retry_policy: TaskRetryPolicy | None = None,
+        log_output: bool = True,
+        on_output_log: Callable[[str], None] | None = None,
     ) -> None:
         self.state_store = state_store
         selected_retry_policy = retry_policy or (
@@ -82,6 +84,8 @@ class UpdateService:
         self.request_homes = request_homes or local_request_homes
         self.clock = clock or (lambda: datetime.now(local_timezone()))
         self.on_log = on_log
+        self.log_output = log_output
+        self.on_output_log = on_output_log
         self.lock_file = Path(lock_file) if lock_file is not None else None
         self.task_id = task_id
         self.history_store = history_store or RunHistoryStore(
@@ -193,7 +197,10 @@ class UpdateService:
             progress_active = False
             tail.append(line)
             self.coordinator.record_output(tuple(tail))
-            self.on_log(strip_ansi(line))
+            if self.on_output_log is not None:
+                self.on_output_log(strip_ansi(line))
+            elif self.log_output:
+                self.on_log(strip_ansi(line))
 
         def on_progress(line: str) -> None:
             nonlocal progress_active, last_progress_write

@@ -168,6 +168,7 @@ class FullDetailsWindow(QWidget):
         user_tools_enabled: bool = True,
         user_request_file: Path | None = None,
         log_file: Path | None = None,
+        user_log_file: Path | None = None,
         system_output_visible: bool = True,
         system_manual_retry_limit: int = 0,
         user_manual_retry_limit: int = 0,
@@ -193,7 +194,9 @@ class FullDetailsWindow(QWidget):
         self.user_automatic_retry_limit = user_automatic_retry_limit
         self.user_request_file = Path(user_request_file) if user_request_file else None
         self.log_file = Path(log_file) if log_file is not None else None
+        self.user_log_file = Path(user_log_file) if user_log_file is not None else None
         self._active_log_date: date | None = None
+        self._active_user_log_date: date | None = None
         self._history_text: str | None = None
         self.user_tool_preferences = user_tool_preferences
         self.admin_allowed_user_tools = tuple(admin_allowed_user_tools)
@@ -287,6 +290,13 @@ class FullDetailsWindow(QWidget):
         self.open_log_button.setObjectName("openCurrentLog")
         self.open_log_button.setToolTip("Open the current updater log in your default viewer.")
         self.open_log_button.clicked.connect(self._open_current_log)
+        self.open_user_log_button = QPushButton("Open last user-tools log")
+        self.open_user_log_button.setObjectName("openUserToolsLog")
+        self.open_user_log_button.setToolTip(
+            "Open the private log containing output from your personal-tool updates."
+        )
+        self.open_user_log_button.setVisible(self.user_log_file is not None)
+        self.open_user_log_button.clicked.connect(self._open_user_tools_log)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 12, 14, 12)
@@ -297,6 +307,8 @@ class FullDetailsWindow(QWidget):
         controls.addStretch(1)
         controls.addWidget(self.back_button)
         controls.addWidget(self.open_log_button)
+        if self.user_log_file is not None:
+            controls.addWidget(self.open_user_log_button)
         layout.addLayout(controls)
 
         self._timer = QTimer(self)
@@ -312,6 +324,7 @@ class FullDetailsWindow(QWidget):
         )
         user_state = self._read_state(self.user_state_store, self.user_tools_enabled)
         self._active_log_date = _active_log_date(system_state, user_state)
+        self._active_user_log_date = _state_log_date(user_state)
         self._update_open_log_button()
         if user_state.run_id != self._user_retry_requested_for:
             self._user_retry_requested_for = None
@@ -357,7 +370,10 @@ class FullDetailsWindow(QWidget):
         self._sync_sections(system_state, user_state)
         if active and self._completion_emitted:
             self._completion_emitted = False
-        self._seen_active = self._seen_active or active
+        if self.isVisible():
+            self._seen_active = self._seen_active or active
+        else:
+            self._seen_active = False
         if self.isVisible() and self._seen_active and not active and not self._completion_emitted:
             self._completion_emitted = True
             QTimer.singleShot(0, self.all_updates_done.emit)
@@ -543,11 +559,20 @@ class FullDetailsWindow(QWidget):
         self.open_log_button.setEnabled(
             path is not None and path.is_file() and not path.is_symlink()
         )
+        user_path = self._current_user_log_path()
+        self.open_user_log_button.setEnabled(
+            user_path is not None and user_path.is_file() and not user_path.is_symlink()
+        )
 
     def _current_log_path(self) -> Path | None:
         if self.log_file is None:
             return None
         return current_log_path(self.log_file, self._active_log_date)
+
+    def _current_user_log_path(self) -> Path | None:
+        if self.user_log_file is None:
+            return None
+        return current_log_path(self.user_log_file, self._active_user_log_date)
 
     def _open_current_log(self) -> None:
         path = self._current_log_path()
@@ -564,6 +589,23 @@ class FullDetailsWindow(QWidget):
                 self,
                 "Open current log",
                 f"Could not open the updater log:\n{path}",
+            )
+
+    def _open_user_tools_log(self) -> None:
+        path = self._current_user_log_path()
+        if path is None or path.is_symlink() or not path.is_file():
+            QMessageBox.information(
+                self,
+                "User-tools log",
+                "The personal-tool update log is not available.",
+            )
+            self._update_open_log_button()
+            return
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))):
+            QMessageBox.warning(
+                self,
+                "Open user-tools log",
+                f"Could not open the personal-tool update log:\n{path}",
             )
 
     def _return_to_minimal(self) -> None:
@@ -604,6 +646,17 @@ def _active_log_date(*states: UpdateState) -> date | None:
         except (OverflowError, OSError, ValueError):
             continue
     return max(active_starts).date() if active_starts else None
+
+
+def _state_log_date(state: UpdateState) -> date | None:
+    """Use the latest personal-tool run's start date to select its log."""
+    timestamp = state.started_at or state.finished_at
+    if timestamp is None:
+        return None
+    try:
+        return datetime.fromisoformat(timestamp).astimezone().date()
+    except (OverflowError, OSError, ValueError):
+        return None
 
 
 class _TerminalStyle:

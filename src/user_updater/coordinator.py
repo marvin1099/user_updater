@@ -272,7 +272,7 @@ class UpdateCoordinator:
         matching = [
             request
             for request in requests
-            if request.run_id == state.run_id and _request_is_timely(request, deadline, now)
+            if request.run_id == state.run_id and now <= deadline
         ]
         deferral = next(
             (
@@ -351,12 +351,3 @@ def _parse_datetime(value: str | None, name: str) -> datetime:
     if parsed.tzinfo is None:
         raise ValueError(f"state {name} must include a timezone")
     return parsed
-
-
-def _request_is_timely(request: UserRequest, deadline: datetime, now: datetime) -> bool:
-    if request.submitted_at is None:
-        return now <= deadline
-    submitted_at = datetime.fromisoformat(request.submitted_at)
-    if submitted_at.tzinfo is None:
-        return False
-    return submitted_at <= deadline

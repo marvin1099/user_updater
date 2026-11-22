@@ -51,11 +51,23 @@ def test_system_and_per_user_jobs_are_independent_and_tick_in_parallel(
     )
     barrier = threading.Barrier(3)
     observed: list[tuple[Path, Path | None]] = []
+    private_store_settings: list[tuple[int, int | None, int | None, int, bool]] = []
 
     class ParallelService:
         def __init__(self, _policy, state_store, _workflow, **kwargs) -> None:
             self.state_store = state_store
             self.lock_file = kwargs["lock_file"]
+            if state_store.path.parent == paths.user_state_dir:
+                history_store = kwargs["history_store"]
+                private_store_settings.append(
+                    (
+                        state_store.file_mode,
+                        state_store.owner_uid,
+                        state_store.owner_gid,
+                        history_store.file_mode,
+                        kwargs["log_output"],
+                    )
+                )
 
         def tick(self) -> TickAction:
             barrier.wait(timeout=5)
@@ -73,6 +85,39 @@ def test_system_and_per_user_jobs_are_independent_and_tick_in_parallel(
     assert len(observed) == 3
     assert len({state_path for state_path, _lock in observed}) == 3
     assert len({lock_path for _state_path, lock_path in observed}) == 3
+    assert sorted(private_store_settings) == [
+        (0o400, 1001, 1001, 0o400, False),
+        (0o400, 1002, 1002, 0o400, False),
+    ]
+
+
+def test_system_install_persists_the_canonical_executable_path(
+    monkeypatch, tmp_path: Path
+) -> None:
+    target = tmp_path / "trusted" / "user-updater"
+    target.parent.mkdir()
+    target.write_text("#!/bin/sh\n", encoding="utf-8")
+    symlink = tmp_path / "user-updater"
+    symlink.symlink_to(target)
+    checked: list[Path] = []
+    installed: list[Path] = []
+
+    class Installer:
+        def __init__(self, paths) -> None:
+            installed.append(paths.executable)
+
+        def install(self) -> None:
+            pass
+
+    monkeypatch.setattr(cli, "_executable_path", lambda: symlink)
+    monkeypatch.setattr(cli, "_require_root", lambda _action: None)
+    monkeypatch.setattr(cli, "_require_trusted_system_install", checked.append)
+    monkeypatch.setattr(cli, "SystemInstaller", Installer)
+
+    assert cli._install(system_mode=True) == 0
+
+    assert checked == [target.resolve()]
+    assert installed == [target.resolve()]
 
 
 def test_cli_applies_owner_tool_preferences_within_admin_allow_list(
@@ -391,7 +436,11 @@ def test_system_retry_uses_pkexec_instead_of_running_as_the_desktop_user(
     StateStore(paths.state).save(
         UpdateState(phase="failed", run_id="failed-system-run", returncode=1)
     )
+    executable_target = tmp_path / "trusted" / "user-updater"
+    executable_target.parent.mkdir()
+    executable_target.write_text("#!/bin/sh\n", encoding="utf-8")
     executable = tmp_path / "user-updater"
+    executable.symlink_to(executable_target)
     observed: list[list[str]] = []
     monkeypatch.setattr(cli, "system_paths", lambda: paths)
     monkeypatch.setattr(cli.os, "geteuid", lambda: 1000)
@@ -412,7 +461,9 @@ def test_system_retry_uses_pkexec_instead_of_running_as_the_desktop_user(
     result = cli.main(["retry", "--system"])
 
     assert result == 0
-    assert observed == [["/usr/bin/pkexec", str(executable), "retry", "--system"]]
+    assert observed == [
+        ["/usr/bin/pkexec", str(executable_target.resolve()), "retry", "--system"]
+    ]
     assert "Retry complete." in capsys.readouterr().out
 
 

@@ -5,11 +5,13 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
+import logging
 import os
 import pwd
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -18,7 +20,11 @@ from .accounts import BuilderAccountManager
 from .coordinator import TickAction
 from .history import HistoryError, RunHistoryStore, RunRecord, history_path_for_state
 from .installer import InstallPaths, SystemInstaller, UserInstaller, UserInstallPaths
-from .logging_config import configure_logging, current_log_path
+from .logging_config import (
+    configure_logging,
+    configure_user_output_logging,
+    current_log_path,
+)
 from .paths import system_paths, user_paths
 from .policy import PolicyError, consume_test_outcome, load_policy, write_policy
 from .requests import UserRequest, save_request, task_request_path
@@ -167,6 +173,7 @@ def _install(system_mode: bool) -> int:
     executable = _executable_path()
     if system_mode:
         _require_root("machine-wide installation")
+        executable = executable.resolve()
         _require_trusted_system_install(executable)
         SystemInstaller(InstallPaths(executable=executable)).install()
         print("Installed machine-wide service and all-user desktop autostart.")
@@ -242,7 +249,22 @@ def _tick(system_mode: bool) -> int:
             user_state_path = (
                 paths.user_state_dir / f"{user.uid}.json" if system_mode else paths.state
             )
-            user_store = StateStore(user_state_path, file_mode=state_mode)
+            user_store = StateStore(
+                user_state_path,
+                file_mode=0o400 if system_mode else state_mode,
+                owner_uid=user.uid if system_mode else None,
+                owner_gid=user.gid if system_mode else None,
+            )
+            user_history_store = None
+            if system_mode:
+                user_store.ensure_permissions()
+                user_history_store = RunHistoryStore(
+                    history_path_for_state(user_state_path),
+                    file_mode=0o400,
+                    owner_uid=user.uid,
+                    owner_gid=user.gid,
+                )
+                user_history_store.ensure_permissions()
 
             def sessions_for_user(selected: DesktopUser = user) -> list[DesktopUser]:
                 return [selected]
@@ -255,6 +277,15 @@ def _tick(system_mode: bool) -> int:
                 builder_manager=None,
                 session_detector=sessions_for_user,
                 test_outcome=lambda: consume_test_outcome(paths.policy, "user_tools"),
+            )
+            user_output_log = (
+                _private_user_output_callback(
+                    paths.user_state_dir / f"{user.uid}.log",
+                    user.uid,
+                    user.gid,
+                )
+                if system_mode
+                else None
             )
             jobs.append(
                 (
@@ -269,6 +300,9 @@ def _tick(system_mode: bool) -> int:
                         interval_hours=policy.schedule.user_tools_interval_hours,
                         response_minutes=policy.schedule.user_tools_response_minutes,
                         lock_file=(paths.state.parent / "locks" / f"user-tools-{user.uid}.lock"),
+                        history_store=user_history_store,
+                        log_output=not system_mode,
+                        on_output_log=user_output_log,
                     ),
                     user_store,
                 )
@@ -316,7 +350,7 @@ def _retry(system_mode: bool) -> int:
             "user-requested system retries are disabled or exhausted by administrator policy"
         )
 
-    executable = _executable_path()
+    executable = _executable_path().resolve()
     if os.geteuid() != 0:
         _require_trusted_system_install(executable)
         pkexec = shutil.which("pkexec")
@@ -846,6 +880,22 @@ def _executable_path() -> Path:
     if not path.is_absolute():
         path = Path.cwd() / path
     return path.absolute()
+
+
+def _private_user_output_callback(
+    log_file: Path,
+    owner_uid: int,
+    owner_gid: int,
+) -> Callable[[str], None]:
+    logger: logging.Logger | None = None
+
+    def write_output(line: str) -> None:
+        nonlocal logger
+        if logger is None:
+            logger = configure_user_output_logging(log_file, owner_uid, owner_gid)
+        logger.info("%s", line)
+
+    return write_output
 
 
 def _require_trusted_system_install(executable: Path) -> None:

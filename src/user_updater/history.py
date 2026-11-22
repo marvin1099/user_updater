@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -39,12 +40,44 @@ class RunRecord:
 class RunHistoryStore:
     """Atomically persist a bounded, newest-first list of run summaries."""
 
-    def __init__(self, path: Path, *, file_mode: int = 0o600, limit: int = 20) -> None:
+    def __init__(
+        self,
+        path: Path,
+        *,
+        file_mode: int = 0o600,
+        limit: int = 20,
+        owner_uid: int | None = None,
+        owner_gid: int | None = None,
+    ) -> None:
         if type(limit) is not int or limit < 1:
             raise ValueError("history limit must be a positive integer")
         self.path = Path(path)
         self.file_mode = file_mode
         self.limit = limit
+        self.owner_uid = owner_uid
+        self.owner_gid = owner_gid
+
+    def ensure_permissions(self) -> None:
+        """Apply this store's owner and mode to an existing history file."""
+        try:
+            flags = os.O_RDONLY | os.O_CLOEXEC
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            descriptor = os.open(self.path, flags)
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            raise HistoryError(f"cannot secure run history {self.path}: {exc}") from exc
+        try:
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISREG(metadata.st_mode):
+                raise HistoryError(f"run history path is not a regular file: {self.path}")
+            self._set_owner(descriptor)
+            os.fchmod(descriptor, self.file_mode)
+        except OSError as exc:
+            raise HistoryError(f"cannot secure run history {self.path}: {exc}") from exc
+        finally:
+            os.close(descriptor)
 
     def load(self) -> tuple[RunRecord, ...]:
         try:
@@ -100,6 +133,7 @@ class RunHistoryStore:
                 delete=False,
             ) as stream:
                 temporary_path = Path(stream.name)
+                self._set_owner(stream.fileno())
                 os.fchmod(stream.fileno(), self.file_mode)
                 json.dump(
                     {"version": 1, "runs": [asdict(record) for record in records]},
@@ -120,6 +154,15 @@ class RunHistoryStore:
             if temporary_path is not None:
                 temporary_path.unlink(missing_ok=True)
             raise HistoryError(f"cannot write run history {self.path}: {exc}") from exc
+
+    def _set_owner(self, descriptor: int) -> None:
+        if self.owner_uid is None and self.owner_gid is None:
+            return
+        os.fchown(
+            descriptor,
+            -1 if self.owner_uid is None else self.owner_uid,
+            -1 if self.owner_gid is None else self.owner_gid,
+        )
 
 
 def _record_from_mapping(raw: Any) -> RunRecord:

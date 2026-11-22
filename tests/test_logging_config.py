@@ -1,3 +1,5 @@
+import logging
+import os
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -19,6 +21,35 @@ def test_configured_log_includes_entries_and_uses_private_permissions(
     assert "user package update started" in daily_file.read_text(encoding="utf-8")
     assert log_file.parent.stat().st_mode & 0o777 == 0o700
     assert daily_file.stat().st_mode & 0o777 == 0o600
+
+
+def test_personal_tool_output_log_is_owned_by_the_user_and_file_only(
+    tmp_path: Path,
+) -> None:
+    base = tmp_path / "users" / f"{os.getuid()}.log"
+    log_date = date(2026, 5, 7)
+    daily_file = logging_config.daily_log_path(base, log_date)
+    logger = logging_config.configure_user_output_logging(
+        base,
+        os.getuid(),
+        os.getgid(),
+        log_date=log_date,
+    )
+    try:
+        logger.info("private personal-tool output")
+        for handler in logger.handlers:
+            handler.flush()
+
+        assert "private personal-tool output" in daily_file.read_text(encoding="utf-8")
+        assert daily_file.stat().st_mode & 0o777 == 0o600
+        assert daily_file.stat().st_uid == os.getuid()
+        assert daily_file.stat().st_gid == os.getgid()
+        assert len(logger.handlers) == 1
+        assert isinstance(logger.handlers[0], logging.FileHandler)
+    finally:
+        for handler in logger.handlers[:]:
+            logger.removeHandler(handler)
+            handler.close()
 
 
 def test_run_log_stays_pinned_to_its_start_day_across_midnight(tmp_path: Path) -> None:

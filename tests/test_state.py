@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -25,6 +26,31 @@ def test_state_store_round_trips_and_atomically_replaces_state(tmp_path: Path) -
 
 def test_missing_state_starts_with_idle_state(tmp_path: Path) -> None:
     assert StateStore(tmp_path / "state.json").load() == UpdateState()
+
+
+def test_state_store_applies_private_owner_and_mode_to_existing_and_new_files(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "state.json"
+    path.write_text("{}", encoding="utf-8")
+    path.chmod(0o644)
+    store = StateStore(
+        path,
+        file_mode=0o600,
+        owner_uid=os.getuid(),
+        owner_gid=os.getgid(),
+    )
+
+    store.ensure_permissions()
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert path.stat().st_uid == os.getuid()
+    assert path.stat().st_gid == os.getgid()
+
+    store.save(UpdateState(phase="running", last_output=("private output",)))
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert path.stat().st_uid == os.getuid()
+    assert path.stat().st_gid == os.getgid()
+    assert store.load().last_output == ("private output",)
 
 
 def test_state_store_round_trips_retry_group_and_counters(tmp_path: Path) -> None:

@@ -222,6 +222,34 @@ def test_service_recovers_interrupted_run_and_does_not_replay_it(tmp_path: Path)
     assert workflow.calls == 0
 
 
+def test_service_can_keep_user_command_output_out_of_shared_logs(tmp_path: Path) -> None:
+    state_store = StateStore(tmp_path / "state.json")
+    state_store.save(
+        UpdateState(
+            phase="awaiting_response",
+            run_id="user-run",
+            scheduled_for=NOW.isoformat(),
+            response_deadline=NOW.isoformat(),
+        )
+    )
+    messages: list[str] = []
+    private_output: list[str] = []
+    service = UpdateService(
+        load_policy(),
+        state_store,
+        FakeWorkflow(),
+        on_log=messages.append,
+        log_output=False,
+        on_output_log=private_output.append,
+    )
+
+    service.tick(NOW + timedelta(seconds=1))
+
+    assert "fake topgrade completed" in state_store.load().last_output
+    assert "fake topgrade completed" not in "\n".join(messages)
+    assert private_output == ["fake topgrade completed"]
+
+
 def test_manual_retry_starts_a_new_run_for_a_failed_task(tmp_path: Path) -> None:
     store = StateStore(tmp_path / "state.json")
     store.save(

@@ -872,6 +872,7 @@ def test_full_details_has_collapsible_task_sections_and_returns_after_completion
     )
     window = FullDetailsWindow(system_store, user_store)
     window.show()
+    window.refresh()
     app.processEvents()
 
     assert window.system_section.is_expanded()
@@ -903,6 +904,25 @@ def test_full_details_has_collapsible_task_sections_and_returns_after_completion
     window.reset_section_expansion()
     assert not window.system_section.is_expanded()
     assert window.history_section.is_expanded()
+    window.deleteLater()
+
+
+def test_details_does_not_close_for_a_run_completed_while_hidden(tmp_path: Path) -> None:
+    app = _application()
+    user_store = StateStore(tmp_path / "user.json")
+    user_store.save(UpdateState(phase="running", run_id="hidden-run"))
+    window = FullDetailsWindow(None, user_store)
+    completed: list[bool] = []
+    window.all_updates_done.connect(lambda: completed.append(True))
+
+    user_store.save(UpdateState(phase="succeeded", run_id="hidden-run"))
+    window.refresh()
+    window.show()
+    window.refresh()
+    app.processEvents()
+
+    assert window.isVisible()
+    assert completed == []
     window.deleteLater()
 
 
@@ -1225,6 +1245,40 @@ def test_open_current_log_button_opens_the_pinned_daily_log_at_bottom_right(
     assert controls.itemAt(controls.count() - 1).widget() is window.open_log_button
 
     window.open_log_button.click()
+
+    assert opened == [str(selected_log)]
+    window.deleteLater()
+
+
+def test_open_last_user_tools_log_button_opens_private_daily_log(
+    monkeypatch, tmp_path: Path
+) -> None:
+    _application()
+    user_store = StateStore(tmp_path / "user.json")
+    started_at = datetime.now().astimezone() - timedelta(days=1)
+    user_store.save(
+        UpdateState(
+            phase="succeeded",
+            run_id="personal-run",
+            started_at=started_at.isoformat(),
+            finished_at=(started_at + timedelta(minutes=5)).isoformat(),
+        )
+    )
+    log_file = tmp_path / "users" / "1001.log"
+    selected_log = daily_log_path(log_file, started_at.date())
+    selected_log.parent.mkdir()
+    selected_log.write_text("private personal-tool output\n", encoding="utf-8")
+    opened: list[str] = []
+    monkeypatch.setattr(
+        QDesktopServices,
+        "openUrl",
+        lambda url: (opened.append(url.toLocalFile()) or True),
+    )
+
+    window = FullDetailsWindow(None, user_store, user_log_file=log_file)
+
+    assert window.open_user_log_button.isEnabled()
+    window.open_user_log_button.click()
 
     assert opened == [str(selected_log)]
     window.deleteLater()

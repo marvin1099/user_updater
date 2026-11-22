@@ -1,3 +1,4 @@
+import os
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -39,6 +40,25 @@ def test_run_history_keeps_the_newest_summaries_in_newest_first_order(
     assert records[1].message == "run 1 result"
     assert not hasattr(records[0], "last_output")
     assert store.path.stat().st_mode & 0o777 == 0o600
+
+
+def test_run_history_store_applies_private_owner_and_mode(tmp_path: Path) -> None:
+    path = tmp_path / "history.json"
+    path.write_text('{"runs":[],"version":1}\n', encoding="utf-8")
+    path.chmod(0o644)
+    store = RunHistoryStore(
+        path,
+        file_mode=0o600,
+        owner_uid=os.getuid(),
+        owner_gid=os.getgid(),
+    )
+
+    store.ensure_permissions()
+    store.append("user-tools", UpdateState(phase="succeeded"))
+
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert path.stat().st_uid == os.getuid()
+    assert path.stat().st_gid == os.getgid()
 
 
 def test_run_history_rejects_malformed_files_without_returning_partial_data(

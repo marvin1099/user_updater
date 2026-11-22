@@ -158,9 +158,7 @@ def test_system_reschedule_uses_system_policy_and_ignores_start_now(
     )
 
 
-def test_timely_response_is_honored_even_if_worker_polls_after_deadline(
-    tmp_path: Path,
-) -> None:
+def test_timely_response_is_honored_before_deadline(tmp_path: Path) -> None:
     store = _store_due_now(tmp_path)
     store.save(
         UpdateState(
@@ -178,12 +176,12 @@ def test_timely_response_is_honored_even_if_worker_polls_after_deadline(
         submitted_at=(NOW + timedelta(minutes=4, seconds=59)).isoformat(),
     )
 
-    action = coordinator.tick(NOW + timedelta(minutes=5, seconds=30), [timely_request])
+    action = coordinator.tick(NOW + timedelta(minutes=4, seconds=59), [timely_request])
 
     assert action is TickAction.DEFERRED
 
 
-def test_late_response_does_not_extend_the_response_window(tmp_path: Path) -> None:
+def test_backdated_late_response_does_not_extend_the_response_window(tmp_path: Path) -> None:
     store = _store_due_now(tmp_path)
     store.save(
         UpdateState(
@@ -198,7 +196,7 @@ def test_late_response_does_not_extend_the_response_window(tmp_path: Path) -> No
         run_id="scheduled-run",
         action="defer",
         hours=1,
-        submitted_at=(NOW + timedelta(minutes=5, seconds=1)).isoformat(),
+        submitted_at=(NOW + timedelta(minutes=4, seconds=59)).isoformat(),
     )
 
     action = coordinator.tick(NOW + timedelta(minutes=6), [late_request])
