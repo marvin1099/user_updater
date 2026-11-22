@@ -23,6 +23,11 @@ def run_gui(system_mode: bool = False) -> int:
     application = QApplication.instance() or QApplication([])
     application.setApplicationName("User Updater")
     application.setQuitOnLastWindowClosed(False)
+    icon = QIcon.fromTheme(
+        "system-software-update",
+        QApplication.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon),
+    )
+    application.setWindowIcon(icon)
     home = Path(pwd.getpwuid(os.getuid()).pw_dir)
     if system_mode:
         migrate_user_data_dirs(home, owner_uid=os.getuid())
@@ -106,8 +111,7 @@ def run_gui(system_mode: bool = False) -> int:
 
     tray: QSystemTrayIcon | None = None
     if QSystemTrayIcon.isSystemTrayAvailable():
-        icon = QApplication.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
-        tray = QSystemTrayIcon(QIcon(icon), application)
+        tray = QSystemTrayIcon(icon, application)
         tray.setToolTip("User Updater")
         menu = QMenu()
         show_action = QAction("Show update status", menu)

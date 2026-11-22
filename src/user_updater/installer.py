@@ -252,6 +252,7 @@ Type=Application
 Name=User Updater
 Comment=Update status and rescheduling controls
 Exec={binary} {command} {mode}
+Icon=system-software-update
 Terminal=false
 NoDisplay=true
 X-GNOME-Autostart-enabled=true

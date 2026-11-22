@@ -62,6 +62,7 @@ def test_system_install_creates_admin_policy_service_timer_and_global_autostart(
     assert "ExecStart=/usr/local/bin/user-updater tick --system" in service
     assert "OnUnitActiveSec=1min" in timer
     assert "Exec=/usr/local/bin/user-updater gui --system" in autostart
+    assert "Icon=system-software-update" in autostart
     assert (
         '<annotate key="org.freedesktop.policykit.exec.path">'
         "/usr/local/bin/user-updater-admin</annotate>"
@@ -152,6 +153,7 @@ def test_user_install_defaults_to_user_tools_only(tmp_path: Path) -> None:
     assert policy.updates.run_user_tools is True
     assert "tick --user" in service.read_text(encoding="utf-8")
     assert "gui --user" in autostart.read_text(encoding="utf-8")
+    assert "Icon=system-software-update" in autostart.read_text(encoding="utf-8")
 
 
 def test_user_install_migrates_legacy_user_data_directories(tmp_path: Path) -> None:
