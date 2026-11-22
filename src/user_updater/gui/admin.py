@@ -123,7 +123,7 @@ class AdminSettingsDialog(QDialog):
         retry_layout.addWidget(user_retry_group)
         form.addRow(retry_group)
 
-        testing_content = QWidget()
+        testing_content = QGroupBox()
         testing_form = QFormLayout(testing_content)
         self.system_forced_failures = _spin(policy.testing.system.fail_next, 0, 100)
         self.user_forced_failures = _spin(policy.testing.user_tools.fail_next, 0, 100)
@@ -172,15 +172,6 @@ class AdminSettingsDialog(QDialog):
         self.testing_section = CollapsibleSection("Testing", testing_content, expanded=False)
         self.testing_section.setObjectName("testingSection")
         self.testing_section.content.setObjectName("testingSectionContent")
-        self.testing_section.setStyleSheet(
-            "QWidget#testingSection { border: 1px solid palette(mid); border-radius: 4px; "
-            "padding: 3px; }"
-            "QWidget#testingSection QToolButton { border: none; background: transparent; "
-            "padding: 2px; }"
-        )
-        self.testing_section.content.setStyleSheet(
-            "QWidget#testingSectionContent { border: none; }"
-        )
         form.addRow(self.testing_section)
 
         interaction = QGroupBox("Rescheduling")

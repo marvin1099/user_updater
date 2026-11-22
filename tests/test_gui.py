@@ -7,7 +7,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QApplication, QCheckBox, QLabel, QWidget
+from PySide6.QtWidgets import QApplication, QCheckBox, QGroupBox, QLabel, QWidget
 
 from user_updater.gui import admin as admin_gui
 from user_updater.gui.admin import AdminSettingsDialog
@@ -285,8 +285,7 @@ def test_admin_settings_dialog_builds_a_valid_policy_mapping(tmp_path: Path) -> 
     assert dialog.schedule_group.title() == "Update schedules"
     dialog.testing_section.header.click()
     assert dialog.testing_section.is_expanded()
-    assert "border: 1px solid palette(mid)" in dialog.testing_section.styleSheet()
-    assert "border: none" in dialog.testing_section.content.styleSheet()
+    assert isinstance(dialog.testing_section.content, QGroupBox)
 
     mapping = dialog.policy_mapping()
 
@@ -315,7 +314,7 @@ def test_admin_settings_dialog_builds_a_valid_policy_mapping(tmp_path: Path) -> 
     assert dialog.testing_section.header.x() < dialog.testing_section.width() / 2
     dialog.testing_section.header.click()
     assert not dialog.testing_section.is_expanded()
-    assert "border: 1px solid palette(mid)" in dialog.testing_section.styleSheet()
+    assert isinstance(dialog.testing_section.content, QGroupBox)
     dialog.deleteLater()
 
 
