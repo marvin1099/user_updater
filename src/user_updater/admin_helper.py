@@ -17,6 +17,7 @@ def main(argv: list[str] | None = None) -> int:
         "action",
         choices=(
             "authorize-settings",
+            "session",
             "write-policy",
             "run-now",
             "run-user-tools-now",
@@ -30,6 +31,8 @@ def main(argv: list[str] | None = None) -> int:
         _require_trusted_root_install()
         if args.action == "authorize-settings":
             return 0
+        if args.action == "session":
+            return _run_admin_session()
 
         from . import cli
 
@@ -53,6 +56,12 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, RuntimeError, ValueError, PolicyError) as exc:
         print(f"user-updater-admin: {exc}", file=sys.stderr)
         return 1
+
+
+def _run_admin_session() -> int:
+    from .admin_session import run_admin_session
+
+    return run_admin_session()
 
 
 def _require_trusted_root_install() -> None:

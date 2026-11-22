@@ -5,6 +5,7 @@ from user_updater import admin_helper, cli
 
 def test_admin_helper_exposes_authorized_settings_run_and_schedule_actions(monkeypatch) -> None:
     monkeypatch.setattr(admin_helper, "_require_trusted_root_install", lambda: None)
+    monkeypatch.setattr(admin_helper, "_run_admin_session", lambda: 11)
     monkeypatch.setattr(cli, "_write_admin_policy", lambda: 12)
     monkeypatch.setattr(cli, "_run_system_now", lambda *, system_mode: 23)
     monkeypatch.setattr(cli, "_run_user_tools_now", lambda *, system_mode: 34)
@@ -18,6 +19,7 @@ def test_admin_helper_exposes_authorized_settings_run_and_schedule_actions(monke
     )
 
     assert admin_helper.main(["authorize-settings"]) == 0
+    assert admin_helper.main(["session"]) == 11
     assert admin_helper.main(["write-policy"]) == 12
     assert admin_helper.main(["run-now"]) == 23
     assert admin_helper.main(["run-user-tools-now"]) == 34

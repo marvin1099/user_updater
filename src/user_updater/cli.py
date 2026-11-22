@@ -800,15 +800,23 @@ def _doctor() -> int:
 
 
 def _write_admin_policy() -> int:
-    executable = Path(sys.argv[0])
-    if not executable.is_absolute():
-        executable = Path.cwd() / executable
-    _require_trusted_system_install(executable.absolute())
     encoded = sys.stdin.read(65_537)
     if len(encoded) > 65_536:
         raise ValueError("administrator policy payload is too large")
     raw = json.loads(encoded)
-    saved = write_policy(Path("/etc/user-updater/project.yaml"), raw)
+    _write_admin_policy_mapping(raw)
+    return 0
+
+
+def _write_admin_policy_mapping(raw: object) -> None:
+    executable = Path(sys.argv[0])
+    if not executable.is_absolute():
+        executable = Path.cwd() / executable
+    _require_trusted_system_install(executable.absolute())
+    if not isinstance(raw, dict):
+        raise ValueError("administrator policy must be a JSON object")
+    paths = system_paths()
+    saved = write_policy(paths.policy, raw)
     logger = configure_logging(Path("/var/log/user-updater/updater.log"))
     logger.info(
         "administrator policy changed: system=%s user_tools=%s interval_hours=%d custom_tools=%s",
@@ -817,7 +825,6 @@ def _write_admin_policy() -> int:
         saved.schedule.user_tools_interval_hours,
         saved.updates.allow_custom_user_tools,
     )
-    return 0
 
 
 def _current_desktop_user() -> DesktopUser:

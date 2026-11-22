@@ -1,11 +1,12 @@
 import os
+import sys
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEventLoop, Qt, QTimer
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QApplication, QCheckBox, QGroupBox, QLabel, QWidget
 
@@ -385,61 +386,17 @@ def test_testing_buttons_schedule_real_prompts_and_stack_vertically() -> None:
     dialog.deleteLater()
 
 
-def test_admin_run_now_button_starts_the_authorized_system_command(monkeypatch) -> None:
+def test_admin_update_actions_are_dispatched_to_the_shared_admin_session() -> None:
     _application()
     dialog = AdminSettingsDialog(load_policy())
-    commands: list[tuple[str, list[str]]] = []
-    information_calls: list[tuple[object, ...]] = []
-    monkeypatch.setattr(
-        admin_gui, "_trusted_admin_helper", lambda: "/usr/local/bin/user-updater-admin"
-    )
-    monkeypatch.setattr(
-        admin_gui.shutil,
-        "which",
-        lambda name: "/usr/bin/pkexec" if name == "pkexec" else None,
-    )
-    monkeypatch.setattr(
-        admin_gui.QProcess,
-        "startDetached",
-        lambda executable, arguments: (commands.append((executable, arguments)) or True, 1234),
-    )
-    monkeypatch.setattr(
-        admin_gui.QMessageBox,
-        "information",
-        lambda *args: information_calls.append(args),
-    )
+    actions: list[str] = []
+    dialog.admin_action_requested.connect(actions.append)
 
     dialog.run_system_now_button.click()
-
-    assert commands == [("/usr/bin/pkexec", ["/usr/local/bin/user-updater-admin", "run-now"])]
-    assert information_calls == []
-    dialog.deleteLater()
-
-
-def test_admin_run_now_button_starts_authorized_user_updates(monkeypatch) -> None:
-    _application()
-    dialog = AdminSettingsDialog(load_policy())
-    commands: list[tuple[str, list[str]]] = []
-    monkeypatch.setattr(
-        admin_gui, "_trusted_admin_helper", lambda: "/usr/local/bin/user-updater-admin"
-    )
-    monkeypatch.setattr(
-        admin_gui.shutil,
-        "which",
-        lambda name: "/usr/bin/pkexec" if name == "pkexec" else None,
-    )
-    monkeypatch.setattr(
-        admin_gui.QProcess,
-        "startDetached",
-        lambda executable, arguments: (commands.append((executable, arguments)) or True, 1234),
-    )
-
     assert dialog.run_user_tools_now_button.isEnabled()
     dialog.run_user_tools_now_button.click()
 
-    assert commands == [
-        ("/usr/bin/pkexec", ["/usr/local/bin/user-updater-admin", "run-user-tools-now"])
-    ]
+    assert actions == ["run-system-now", "run-user-tools-now"]
     dialog.run_user_tools.setChecked(False)
     assert not dialog.run_user_tools_now_button.isEnabled()
     dialog.deleteLater()
@@ -455,12 +412,45 @@ def test_admin_helper_path_matches_installed_gui_entrypoint(monkeypatch) -> None
     assert admin_gui._admin_helper_path() == Path("/usr/local/bin/user-updater-admin")
 
 
-def test_admin_settings_are_nonmodal_and_save_through_the_cached_polkit_helper(
+def test_admin_settings_reuse_one_polkit_session_for_actions_and_save(
     monkeypatch, tmp_path: Path
 ) -> None:
+    class FakeSignal:
+        def __init__(self) -> None:
+            self.callbacks = []
+
+        def connect(self, callback) -> None:
+            self.callbacks.append(callback)
+
+        def emit(self, *arguments) -> None:
+            for callback in self.callbacks:
+                callback(*arguments)
+
+    class FakeSession:
+        def __init__(self, _parent, helper, pkexec) -> None:
+            self.helper = helper
+            self.pkexec = pkexec
+            self.ready = FakeSignal()
+            self.failed = FakeSignal()
+            self.finished = FakeSignal()
+            self.is_running = True
+            self.requests: list[tuple[str, dict[str, object]]] = []
+            self.start_count = 0
+
+        def start(self) -> None:
+            self.start_count += 1
+            self.ready.emit()
+
+        def request(self, action, payload, callback) -> None:
+            self.requests.append((action, payload))
+            callback(True, "ok")
+
+        def close(self) -> None:
+            self.is_running = False
+            self.finished.emit()
+
     app = _application()
     helper = "/usr/local/bin/user-updater-admin"
-    commands: list[list[str]] = []
     saved: list[object] = []
     policy_file = tmp_path / "project.yaml"
     policy_file.write_text("version: 1\n", encoding="utf-8")
@@ -472,13 +462,16 @@ def test_admin_settings_are_nonmodal_and_save_through_the_cached_polkit_helper(
         "which",
         lambda name: "/usr/bin/pkexec" if name == "pkexec" else None,
     )
+    sessions: list[FakeSession] = []
 
-    def fake_run(arguments, **_kwargs):
-        commands.append(arguments)
-        return type("Completed", (), {"returncode": 0, "stderr": ""})()
+    def create_session(parent, selected_helper, pkexec):
+        session = FakeSession(parent, selected_helper, pkexec)
+        sessions.append(session)
+        return session
 
-    monkeypatch.setattr(admin_gui.subprocess, "run", fake_run)
+    monkeypatch.setattr(admin_gui, "AdminHelperSession", create_session)
     parent = QWidget()
+    parent.refresh = lambda: None
     admin_gui.open_admin_settings(parent, policy_file, saved.append)
     dialog = parent._admin_settings_dialog
     app.processEvents()
@@ -486,15 +479,76 @@ def test_admin_settings_are_nonmodal_and_save_through_the_cached_polkit_helper(
     assert not dialog.isModal()
     assert dialog.isVisible()
     assert app.activeModalWidget() is None
-    dialog.accept()
+    session = sessions[0]
+    dialog.schedule_system_prompt_button.click()
+    dialog.run_system_now_button.click()
+    dialog.run_user_tools_now_button.click()
+    dialog.save_button.click()
     app.processEvents()
 
-    assert commands == [
-        ["/usr/bin/pkexec", helper, "authorize-settings"],
-        ["/usr/bin/pkexec", helper, "write-policy"],
+    assert len(sessions) == 1
+    assert session.start_count == 1
+    assert session.helper == helper
+    assert session.pkexec == "/usr/bin/pkexec"
+    assert [action for action, _payload in session.requests] == [
+        "schedule-prompt",
+        "run-system-now",
+        "run-user-tools-now",
+        "write-policy",
     ]
+    assert session.requests[0][1] == {"task_id": "system"}
     assert len(saved) == 1
     assert parent._admin_settings_dialog is None
+    assert parent._admin_settings_session is None
+    parent.deleteLater()
+
+
+def test_admin_helper_session_reuses_one_process_for_multiple_actions(tmp_path: Path) -> None:
+    _application()
+    helper = tmp_path / "fake-admin-helper"
+    helper.write_text(
+        f"#!{sys.executable}\n"
+        "import json, sys\n"
+        "print(json.dumps({'event': 'ready'}), flush=True)\n"
+        "for line in sys.stdin:\n"
+        "    request = json.loads(line)\n"
+        "    print(json.dumps({'id': request['id'], 'ok': True, "
+        "'message': request['action']}), flush=True)\n",
+        encoding="utf-8",
+    )
+    helper.chmod(0o755)
+    parent = QWidget()
+    session = admin_gui.AdminHelperSession(parent, str(helper), None)
+    responses: list[tuple[bool, str]] = []
+    errors: list[str] = []
+    loop = QEventLoop()
+    timeout = QTimer()
+    timeout.setSingleShot(True)
+    timeout.timeout.connect(loop.quit)
+
+    def send_second_request(ok: bool, message: str) -> None:
+        responses.append((ok, message))
+        session.request(
+            "schedule-prompt",
+            {"task_id": "system"},
+            lambda second_ok, second_message: (
+                responses.append((second_ok, second_message)),
+                session.close(),
+            ),
+        )
+
+    session.ready.connect(
+        lambda: session.request("write-policy", {}, send_second_request)
+    )
+    session.failed.connect(errors.append)
+    session.finished.connect(loop.quit)
+    session.start()
+    timeout.start(5000)
+    loop.exec()
+
+    assert responses == [(True, "write-policy"), (True, "schedule-prompt")]
+    assert errors == []
+    assert not session.is_running
     parent.deleteLater()
 
 

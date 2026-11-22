@@ -5,12 +5,12 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import subprocess
 import sys
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
-from PySide6.QtCore import QProcess, Qt, QTime, QTimer, Signal
+from PySide6.QtCore import QObject, QProcess, Qt, QTime, QTimer, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -38,9 +38,136 @@ _DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 _TOOLS = ("flatpak", "pipx", "pip", "npm", "cargo", "gem")
 
 
+class AdminHelperSession(QObject):
+    """One polkit-authenticated root helper kept alive for the dialog lifetime."""
+
+    ready = Signal()
+    failed = Signal(str)
+    finished = Signal()
+
+    def __init__(
+        self,
+        parent: QWidget,
+        helper: str,
+        pkexec: str | None,
+    ) -> None:
+        super().__init__(parent)
+        self.process = QProcess(self)
+        self.process.setProcessChannelMode(QProcess.ProcessChannelMode.SeparateChannels)
+        self.process.readyReadStandardOutput.connect(self._read_stdout)
+        self.process.readyReadStandardError.connect(self._read_stderr)
+        self.process.finished.connect(self._process_finished)
+        self.process.errorOccurred.connect(self._process_error)
+        self._helper = helper
+        self._pkexec = pkexec
+        self._stdout_buffer = bytearray()
+        self._stderr_buffer = bytearray()
+        self._callbacks: dict[int, Callable[[bool, str], None]] = {}
+        self._next_request_id = 1
+        self._ready = False
+        self._closing = False
+        self._failed = False
+        self.finished.connect(self.deleteLater)
+
+    @property
+    def is_running(self) -> bool:
+        return self.process.state() != QProcess.ProcessState.NotRunning
+
+    def start(self) -> None:
+        if self._pkexec is None:
+            self.process.start(self._helper, ["session"])
+        else:
+            self.process.start(self._pkexec, [self._helper, "session"])
+
+    def request(
+        self,
+        action: str,
+        payload: dict[str, object],
+        callback: Callable[[bool, str], None],
+    ) -> None:
+        if not self._ready or not self.is_running:
+            callback(False, "The administrator session is not available.")
+            return
+        request_id = self._next_request_id
+        self._next_request_id += 1
+        encoded = (
+            json.dumps({"id": request_id, "action": action, "payload": payload}) + "\n"
+        ).encode("utf-8")
+        if len(encoded) > 65_536:
+            callback(False, "The administrator request is too large.")
+            return
+        self._callbacks[request_id] = callback
+        if self.process.write(encoded) < 0:
+            self._callbacks.pop(request_id, None)
+            callback(False, "Could not send the administrator request.")
+
+    def close(self) -> None:
+        if self._closing:
+            return
+        self._closing = True
+        if self.is_running:
+            self.process.closeWriteChannel()
+
+    def _read_stdout(self) -> None:
+        self._stdout_buffer.extend(bytes(self.process.readAllStandardOutput()))
+        while b"\n" in self._stdout_buffer:
+            line, _, self._stdout_buffer = self._stdout_buffer.partition(b"\n")
+            try:
+                message = json.loads(line.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                self._fail("The administrator helper returned an invalid response.")
+                return
+            if not isinstance(message, dict):
+                self._fail("The administrator helper returned an invalid response.")
+                return
+            if message.get("event") == "ready":
+                self._ready = True
+                self.ready.emit()
+                continue
+            request_id = message.get("id")
+            callback = self._callbacks.pop(request_id, None) if type(request_id) is int else None
+            if callback is not None:
+                callback(bool(message.get("ok")), str(message.get("message", "")))
+
+    def _read_stderr(self) -> None:
+        self._stderr_buffer.extend(bytes(self.process.readAllStandardError()))
+        if len(self._stderr_buffer) > 65_536:
+            del self._stderr_buffer[:-65_536]
+
+    def _process_finished(self, exit_code: int, _exit_status) -> None:
+        self._read_stdout()
+        self._read_stderr()
+        if not self._closing and not self._failed:
+            message = self._stderr_buffer.decode("utf-8", errors="replace").strip()
+            self._fail(message or f"The administrator session ended (status {exit_code}).")
+        self._finish_pending("The administrator session closed before completing the action.")
+        self.finished.emit()
+
+    def _process_error(self, error: QProcess.ProcessError) -> None:
+        if error == QProcess.ProcessError.FailedToStart:
+            self._fail(self.process.errorString())
+            self.finished.emit()
+
+    def _fail(self, message: str) -> None:
+        if self._failed or self._closing:
+            return
+        self._failed = True
+        if self.is_running:
+            self.process.kill()
+        self.failed.emit(message)
+        self._finish_pending(message)
+
+    def _finish_pending(self, message: str) -> None:
+        callbacks, self._callbacks = self._callbacks, {}
+        for callback in callbacks.values():
+            callback(False, message)
+
+
 class AdminSettingsDialog(QDialog):
     """Edit the constrained administrator policy without running Qt as root."""
 
+    save_policy_requested = Signal(object)
+    admin_action_requested = Signal(str)
     schedule_prompt_requested = Signal(str)
 
     def __init__(self, policy: Policy, parent: QWidget | None = None) -> None:
@@ -242,10 +369,13 @@ class AdminSettingsDialog(QDialog):
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
         )
+        self.save_button = buttons.button(QDialogButtonBox.StandardButton.Save)
         self.run_system_now_button = QPushButton("Run system updates now")
         self.run_system_now_button.setObjectName("runSystemNow")
         self.run_system_now_button.setEnabled(policy.updates.run_system)
-        self.run_system_now_button.clicked.connect(lambda: start_system_update_now(self))
+        self.run_system_now_button.clicked.connect(
+            lambda: self.admin_action_requested.emit("run-system-now")
+        )
         self.run_system.toggled.connect(self.run_system_now_button.setEnabled)
         buttons.addButton(self.run_system_now_button, QDialogButtonBox.ButtonRole.ActionRole)
         self.run_user_tools_now_button = QPushButton("Run user updates now")
@@ -254,7 +384,9 @@ class AdminSettingsDialog(QDialog):
             "Run personal-tool updates for all active local desktop users."
         )
         self.run_user_tools_now_button.setEnabled(policy.updates.run_user_tools)
-        self.run_user_tools_now_button.clicked.connect(lambda: start_user_tools_now(self))
+        self.run_user_tools_now_button.clicked.connect(
+            lambda: self.admin_action_requested.emit("run-user-tools-now")
+        )
         self.run_user_tools.toggled.connect(self.run_user_tools_now_button.setEnabled)
         buttons.addButton(self.run_user_tools_now_button, QDialogButtonBox.ButtonRole.ActionRole)
         buttons.accepted.connect(self._validate_and_accept)
@@ -338,94 +470,124 @@ class AdminSettingsDialog(QDialog):
 
     def _validate_and_accept(self) -> None:
         try:
-            self.policy_mapping()
+            mapping = self.policy_mapping()
         except PolicyError as exc:
             QMessageBox.warning(self, "Invalid settings", str(exc))
             return
-        self.accept()
+        self.save_policy_requested.emit(mapping)
 
 
 def open_admin_settings(
     parent: QWidget,
     policy_file: Path,
     on_saved,
-    on_schedule_prompt=None,
 ) -> None:
-    """Authenticate, then show a nonmodal settings dialog using the narrow root helper."""
+    """Use one polkit-authenticated helper session for the entire settings dialog."""
     existing_dialog = getattr(parent, "_admin_settings_dialog", None)
     if existing_dialog is not None and existing_dialog.isVisible():
         existing_dialog.raise_()
         existing_dialog.activateWindow()
         return
+    existing_session = getattr(parent, "_admin_settings_session", None)
+    if existing_session is not None and existing_session.is_running:
+        return
 
     try:
-        pkexec = shutil.which("pkexec")
-        helper: str | None = None
+        pkexec = None
         if os.geteuid() != 0:
+            pkexec = shutil.which("pkexec")
             if pkexec is None:
                 raise RuntimeError("pkexec is required to open administrator settings")
-            helper = _trusted_admin_helper()
-            authentication = subprocess.run(
-                [pkexec, helper, "authorize-settings"],
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                text=True,
-                timeout=120,
-                check=False,
-            )
-            if authentication.returncode != 0:
-                detail = (
-                    authentication.stderr.strip() or "Administrator authorization was cancelled."
-                )
-                QMessageBox.information(parent, "Administrator settings", detail)
+        helper = _trusted_admin_helper()
+        session = AdminHelperSession(parent, helper, pkexec)
+        parent._admin_settings_session = session
+
+        def clear_session() -> None:
+            if getattr(parent, "_admin_settings_session", None) is session:
+                parent._admin_settings_session = None
+
+        def show_dialog() -> None:
+            if getattr(parent, "_admin_settings_session", None) is not session:
+                return
+            try:
+                dialog = AdminSettingsDialog(load_policy(policy_file))
+            except (OSError, RuntimeError, ValueError) as exc:
+                QMessageBox.warning(parent, "Administrator settings", str(exc))
+                session.close()
                 return
 
-        policy = load_policy(policy_file)
-        dialog = AdminSettingsDialog(policy)
-        dialog.setWindowModality(Qt.WindowModality.NonModal)
-        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
-        parent._admin_settings_dialog = dialog
-        if on_schedule_prompt is not None:
-            dialog.schedule_prompt_requested.connect(on_schedule_prompt)
+            dialog.setWindowModality(Qt.WindowModality.NonModal)
+            dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+            parent._admin_settings_dialog = dialog
 
-        def save_dialog_policy() -> None:
-            try:
-                mapping = dialog.policy_mapping()
-                if os.geteuid() == 0:
-                    saved = validate_policy_data(mapping)
-                    from ..policy import write_policy
+            def save_policy(mapping: object) -> None:
+                dialog.save_button.setEnabled(False)
 
-                    write_policy(policy_file, mapping)
-                    on_saved(saved)
-                    return
+                def saved(ok: bool, message: str) -> None:
+                    if not ok:
+                        dialog.save_button.setEnabled(True)
+                        QMessageBox.warning(
+                            dialog,
+                            "Administrator settings",
+                            message or "Could not save administrator policy.",
+                        )
+                        return
+                    try:
+                        on_saved(load_policy(policy_file))
+                    except (OSError, RuntimeError, ValueError) as exc:
+                        dialog.save_button.setEnabled(True)
+                        QMessageBox.warning(dialog, "Administrator settings", str(exc))
+                        return
+                    dialog.accept()
 
-                assert pkexec is not None and helper is not None
-                result = subprocess.run(
-                    [pkexec, helper, "write-policy"],
-                    input=json.dumps(mapping),
-                    capture_output=True,
-                    text=True,
-                    timeout=120,
-                    check=False,
+                session.request("write-policy", {"mapping": mapping}, saved)
+
+            def action_finished(ok: bool, message: str) -> None:
+                if ok:
+                    parent.refresh()
+                else:
+                    QMessageBox.warning(
+                        dialog,
+                        "Administrator action",
+                        message or "The administrator action failed.",
+                    )
+
+            dialog.save_policy_requested.connect(save_policy)
+            dialog.admin_action_requested.connect(
+                lambda action: session.request(action, {}, action_finished)
+            )
+            dialog.schedule_prompt_requested.connect(
+                lambda task_id: session.request(
+                    "schedule-prompt",
+                    {"task_id": task_id},
+                    action_finished,
                 )
-                if result.returncode != 0:
-                    detail = result.stderr.strip() or "Could not save administrator policy."
-                    QMessageBox.warning(parent, "Administrator settings", detail)
-                    return
-                on_saved(load_policy(policy_file))
-            except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
-                QMessageBox.warning(parent, "Administrator settings", str(exc))
+            )
 
-        def clear_dialog(_result: int) -> None:
-            if getattr(parent, "_admin_settings_dialog", None) is dialog:
-                parent._admin_settings_dialog = None
+            def clear_dialog(_result: int) -> None:
+                if getattr(parent, "_admin_settings_dialog", None) is dialog:
+                    parent._admin_settings_dialog = None
+                session.close()
 
-        dialog.accepted.connect(save_dialog_policy)
-        dialog.finished.connect(clear_dialog)
-        dialog.show()
-        dialog.raise_()
-        dialog.activateWindow()
-    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
+            dialog.finished.connect(clear_dialog)
+            dialog.show()
+            dialog.raise_()
+            dialog.activateWindow()
+
+        def session_failed(message: str) -> None:
+            clear_session()
+            dialog = getattr(parent, "_admin_settings_dialog", None)
+            QMessageBox.warning(
+                dialog if dialog is not None else parent,
+                "Administrator settings",
+                message or "Could not start the polkit administrator session.",
+            )
+
+        session.ready.connect(show_dialog)
+        session.failed.connect(session_failed)
+        session.finished.connect(clear_session)
+        session.start()
+    except (OSError, RuntimeError, ValueError) as exc:
         QMessageBox.warning(parent, "Administrator settings", str(exc))
 
 
@@ -470,89 +632,6 @@ def start_system_retry(parent: QWidget) -> None:
 
     monitor.timeout.connect(check_process)
     monitor.start()
-
-
-def start_system_update_now(parent: QWidget) -> None:
-    """Start a fresh machine-wide update under the settings polkit authorization."""
-    try:
-        helper = _trusted_admin_helper()
-        pkexec = shutil.which("pkexec")
-        if pkexec is None:
-            raise RuntimeError("pkexec is required to start machine-wide updates")
-    except (OSError, RuntimeError, ValueError) as exc:
-        QMessageBox.warning(parent, "System updates", str(exc))
-        return
-
-    started, _pid = QProcess.startDetached(pkexec, [helper, "run-now"])
-    if not started:
-        QMessageBox.warning(parent, "System updates", "Could not start pkexec.")
-
-
-def start_user_tools_now(parent: QWidget) -> None:
-    """Start personal-tool updates for active users through the trusted root helper."""
-    try:
-        helper = _trusted_admin_helper()
-        pkexec = shutil.which("pkexec")
-        if pkexec is None:
-            raise RuntimeError("pkexec is required to start user updates")
-    except (OSError, RuntimeError, ValueError) as exc:
-        QMessageBox.warning(parent, "User updates", str(exc))
-        return
-
-    started, _pid = QProcess.startDetached(pkexec, [helper, "run-user-tools-now"])
-    if not started:
-        QMessageBox.warning(parent, "User updates", "Could not start pkexec.")
-
-
-def schedule_update_prompt(parent: QWidget, task_id: str) -> None:
-    """Ask the trusted root helper to schedule a real prompt for one task."""
-    actions = {
-        "system": ("schedule-system-prompt", "system update"),
-        "user-tools": ("schedule-user-tools-prompt", "personal-tool update"),
-    }
-    try:
-        action, label = actions[task_id]
-        helper = _trusted_admin_helper()
-        pkexec = shutil.which("pkexec")
-        if pkexec is None:
-            raise RuntimeError("pkexec is required to schedule an update prompt")
-    except (KeyError, OSError, RuntimeError, ValueError) as exc:
-        QMessageBox.warning(parent, "Schedule update", str(exc))
-        return
-
-    process = QProcess(parent)
-    process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
-    processes = getattr(parent, "_schedule_prompt_processes", [])
-    processes.append(process)
-    parent._schedule_prompt_processes = processes
-    completed = False
-
-    def finish(exit_code: int, detail: str = "") -> None:
-        nonlocal completed
-        if completed:
-            return
-        completed = True
-        processes.remove(process)
-        if exit_code != 0:
-            output = bytes(process.readAllStandardOutput()).decode(errors="replace").strip()
-            QMessageBox.warning(
-                parent,
-                "Schedule update",
-                detail or output or f"Could not schedule the {label} prompt.",
-            )
-        else:
-            parent.refresh()
-        process.deleteLater()
-
-    process.finished.connect(lambda exit_code, _status: finish(exit_code))
-    process.errorOccurred.connect(
-        lambda error: (
-            finish(-1, process.errorString())
-            if error == QProcess.ProcessError.FailedToStart
-            else None
-        )
-    )
-    process.start(pkexec, [helper, action])
 
 
 def _spin(value: int, minimum: int, maximum: int) -> QSpinBox:
