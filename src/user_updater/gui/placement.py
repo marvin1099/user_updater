@@ -39,17 +39,26 @@ def is_kde_session() -> bool:
     )
 
 
-def _kdotool_work_area_move_arguments(pid: int, title: str, margin: int) -> list[str]:
-    """Build a KWin move script scoped to one updater window and its work area."""
+def _kdotool_work_area_move_arguments(
+    pid: int, title: str, margin: int, output_name: str
+) -> list[str]:
+    """Build a KWin move script scoped to one updater window and primary output."""
     script = (
         "var matches = workspace.windowList().filter(function(window) { "
         f"return window.pid === {pid} && window.caption === {json.dumps(title)}; "
         "}); "
+        "var outputs = workspace.screens.filter(function(output) { "
+        f"return output.name === {json.dumps(output_name)}; "
+        "}); "
         'if (matches.length !== 1) { '
         'output_error("Expected exactly one updater window, found " + matches.length); '
+        "} else if (outputs.length !== 1) { "
+        'output_error("Expected exactly one primary output, found " + outputs.length); '
         "} else { "
         "var window = matches[0]; "
-        "var area = workspace.clientArea(KWin.WorkArea, window); "
+        "var output = outputs[0]; "
+        "var area = workspace.clientArea("
+        "KWin.MaximizeArea, output, workspace.currentDesktopForScreen(output)); "
         "var geometry = Object.assign({}, window.frameGeometry); "
         f"geometry.x = area.x + area.width - window.width - {margin}; "
         f"geometry.y = area.y + area.height - window.height - {margin}; "
@@ -89,13 +98,14 @@ class WindowPlacement:
             # LayerShellQt anchors the mapped surface itself, including after output changes.
             return
 
-        if self._kdotool:
-            # Qt's availableGeometry can include Plasma panels on Wayland. Let KWin
-            # calculate its own work area after the window has been registered.
+        primary_screen = QGuiApplication.primaryScreen()
+        if self._kdotool and primary_screen is not None:
+            # KWin's WorkArea can span the virtual desktop. Ask for the usable area
+            # on Qt's primary output after the window has been registered instead.
             QTimer.singleShot(120, self._move_with_kdotool)
             return
 
-        screen = self.window.screen() or QApplication.primaryScreen()
+        screen = primary_screen or self.window.screen()
         if screen is None:
             return
         available = screen.availableGeometry()
@@ -146,11 +156,16 @@ class WindowPlacement:
     def _move_with_kdotool(self) -> None:
         if not self._kdotool:
             return
+        primary_screen = QGuiApplication.primaryScreen()
+        if primary_screen is None:
+            return
         application = QApplication.instance()
         process = QProcess(application)
         process.setProgram(str(Path(self._kdotool)))
         process.setArguments(
-            _kdotool_work_area_move_arguments(os.getpid(), self.title, self.margin)
+            _kdotool_work_area_move_arguments(
+                os.getpid(), self.title, self.margin, primary_screen.name()
+            )
         )
         _ACTIVE_PROCESSES.add(process)
 

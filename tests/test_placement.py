@@ -17,12 +17,18 @@ def _application() -> QApplication:
 
 
 def test_kdotool_move_uses_kde_work_area_and_scopes_window() -> None:
-    arguments = _kdotool_work_area_move_arguments(1234, 'User "Updater" Status', 20)
+    arguments = _kdotool_work_area_move_arguments(
+        1234, 'User "Updater" Status', 20, "HDMI-A-1"
+    )
 
     assert arguments[:3] == ["--quiet", "kwinscript", "--inline"]
     assert 'window.pid === 1234' in arguments[3]
     assert 'window.caption === "User \\"Updater\\" Status"' in arguments[3]
-    assert "workspace.clientArea(KWin.WorkArea, window)" in arguments[3]
+    assert 'output.name === "HDMI-A-1"' in arguments[3]
+    assert (
+        "workspace.clientArea(KWin.MaximizeArea, output, "
+        "workspace.currentDesktopForScreen(output))"
+    ) in arguments[3]
     assert "geometry.x = area.x + area.width - window.width - 20" in arguments[3]
     assert "geometry.y = area.y + area.height - window.height - 20" in arguments[3]
     assert "window.frameGeometry = geometry" in arguments[3]
