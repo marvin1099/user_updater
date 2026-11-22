@@ -17,7 +17,14 @@ from typing import Protocol
 from .coordinator import TickAction, UpdateCoordinator
 from .history import HistoryError, RunHistoryStore, history_path_for_state
 from .policy import Policy, TaskRetryPolicy
-from .requests import UserRequest, load_request, request_path, task_request_path
+from .requests import (
+    UserRequest,
+    legacy_request_path,
+    legacy_task_request_path,
+    load_request,
+    request_path,
+    task_request_path,
+)
 from .runner import strip_ansi
 from .schedule import local_timezone
 from .state import StateError, StateStore
@@ -228,22 +235,29 @@ class UpdateService:
             return []
         requests: list[UserRequest] = []
         for account in self.request_homes():
-            path = (
-                request_path(account.home)
+            paths = (
+                (
+                    request_path(account.home),
+                    legacy_request_path(account.home),
+                )
                 if self.task_id == "update"
-                else task_request_path(account.home, self.task_id)
+                else (
+                    task_request_path(account.home, self.task_id),
+                    legacy_task_request_path(account.home, self.task_id),
+                )
             )
-            request = load_request(path, account.uid, run_id)
-            try:
-                metadata = path.lstat()
-                if stat.S_ISREG(metadata.st_mode) and metadata.st_uid == account.uid:
-                    path.unlink(missing_ok=True)
-            except FileNotFoundError:
-                pass
-            except OSError:
-                continue
-            if accept and request is not None:
-                requests.append(request)
+            for path in dict.fromkeys(paths):
+                request = load_request(path, account.uid, run_id)
+                try:
+                    metadata = path.lstat()
+                    if stat.S_ISREG(metadata.st_mode) and metadata.st_uid == account.uid:
+                        path.unlink(missing_ok=True)
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    continue
+                if accept and request is not None:
+                    requests.append(request)
         return requests
 
 

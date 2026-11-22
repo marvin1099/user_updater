@@ -28,7 +28,7 @@ sudo env \
 sudo user-updater install --system
 ```
 
-The install creates a persistent systemd timer and service, an administrator policy at `/etc/user_updater/project.yaml`, shared state under `/var/lib/user_updater`, rotating logs under `/var/log/user-updater`, and a system-wide XDG autostart entry in `/etc/xdg/autostart`. That global entry is picked up at graphical login by existing users and users added later; adding a user does not require reinstalling the updater or copying a per-user autostart file. It preserves an existing policy on reinstall. **Admin settings** first requires polkit authentication. Saving settings and starting a system update use the same narrow, root-owned helper, so polkit can reuse that authorization instead of prompting again while its temporary authorization remains valid.
+The install creates a persistent systemd timer and service, an administrator policy at `/etc/user-updater/project.yaml`, shared state under `/var/lib/user-updater`, rotating logs under `/var/log/user-updater`, and a system-wide XDG autostart entry in `/etc/xdg/autostart`. That global entry is picked up at graphical login by existing users and users added later; adding a user does not require reinstalling the updater or copying a per-user autostart file. It preserves an existing policy on reinstall. Older underscore-named policy/state directories are migrated on reinstall. **Admin settings** first requires polkit authentication. Saving settings and starting a system update use the same narrow, root-owned helper, so polkit can reuse that authorization instead of prompting again while its temporary authorization remains valid.
 
 System mode requires a root-owned, non-group/world-writable Python installation. This avoids running privileged update code from a user-writable checkout. Do not install this mode from untrusted source.
 
@@ -55,10 +55,10 @@ The demo uses simulated state and never invokes package managers or requests adm
 
 ## Administrator policy
 
-The checked-in [`project.yaml`](project.yaml) is the default policy. System installation copies its defaults to `/etc/user_updater/project.yaml` only when no policy exists. Validate a policy with:
+The checked-in [`project.yaml`](project.yaml) is the default policy. System installation copies its defaults to `/etc/user-updater/project.yaml` only when no policy exists. Validate a policy with:
 
 ```console
-user-updater validate-policy /etc/user_updater/project.yaml
+user-updater validate-policy /etc/user-updater/project.yaml
 ```
 
 Default behavior:
@@ -73,13 +73,13 @@ Default behavior:
 - System updates run under a short-lived, non-login builder account. Topgrade runs its full step set as that builder, using a private config with `[misc] assume_yes = true` and `[flatpak] use_sudo = true`; the user's Topgrade config is not reused. Topgrade handles the detected system package manager—including Garuda's update integration—and the other available steps. The builder's passwordless sudo permissions remain governed by `security.builder_sudo_mode` and are restricted to the detected package manager and Flatpak by default. Per-user tools continue to run separately under each desktop user's account.
 - Active local graphical users can have their configured per-user tools updated separately, without administrator privileges. Their state is stored independently by UID.
 - The administrator's `updates.user_tools` list is the hard allow-list for personal tools. Users may opt out of individual allowed tools; all allowed tools start selected until a user saves preferences. Administrators can disable personal-tool updates entirely with `updates.run_user_tools: false`.
-- Built-in user tools can be followed by executable custom hooks from `~/.config/user_updater/tools.d`. Users can enable or disable these scripts in **Full details → User tools**; the administrator can disable them globally with `updates.allow_custom_user_tools: false`. Scripts run as their owner, never as root.
+- Built-in user tools can be followed by executable custom hooks from `~/.config/user-updater/tools.d`. Users can enable or disable these scripts in **Full details → User tools**; the administrator can disable them globally with `updates.allow_custom_user_tools: false`. Scripts run as their owner, never as root. Existing underscore-named user config/state directories are migrated on user install or desktop startup.
 
 Retry policy is configured independently under `retry.system` and `retry.user_tools`. Each section accepts `automatic_attempts` (0–5), `delay_minutes` (1–1440), and `user_manual_attempts` (0–5). Set `interaction.allow_deferral: false` to remove personal-tool rescheduling while retaining its response window. System rescheduling is controlled separately by `interaction.allow_system_deferral` (enabled by default). `interaction.deferral_options_hours` sets the preferred delays; each prompt shortens its largest choice to stay strictly within the remaining time. `interaction.max_user_tools_deferral_hours` defaults to 48 and `interaction.max_system_deferral_hours` to 24. The reschedule time is measured from the original scheduled run, so repeated deferrals are limited by elapsed time rather than a count. System rescheduling also stops before the next configured system schedule. `security.builder_sudo_mode: unrestricted` grants the temporary builder unrestricted passwordless sudo for the duration of the run; the default is the restricted `package-manager` mode.
 
 Unknown policy keys and invalid values are rejected. User-mode execution always disables system updates even if a local policy attempts to enable them.
 
-The minimal desktop view can show machine-wide system updates with reschedule controls when the administrator enables them; users cannot start system updates immediately. A permitted system retry requires polkit authorization. Full details has collapsible System updates, User tools, and Run history sections, with read-only output, elapsed time, and the next scheduled run. System output shows a read-only, bounded preview (up to 200 recent lines); the full system log is readable by all users but writable only by root. Users can toggle their allowed personal tools in the User tools section and may retry failed personal-tool runs only within the administrator's configured limit.
+The minimal desktop view combines each due task's status, available reschedule choice, **Confirm** action, and automatic-start countdown in one row. These controls appear only during that task's response window. The system row is reschedule-only; users cannot start system updates immediately. A permitted system retry requires polkit authorization. Full details has collapsible System updates, User tools, and Run history sections, with read-only output, elapsed time, and the next scheduled run. System output shows a read-only, bounded preview (up to 200 recent lines); the full system log is readable by all users but writable only by root. Users can toggle their allowed personal tools in the User tools section and may retry failed personal-tool runs only within the administrator's configured limit.
 
 ### Wayland window placement
 
@@ -110,7 +110,7 @@ The minimal desktop view can show machine-wide system updates with reschedule co
 
 Uninstall the user integration with `user-updater uninstall --user`; add `--purge` to remove its local policy and state as well.
 
-Each task keeps the latest 20 metadata-only run summaries; output is not duplicated in history. Machine-wide logs at `/var/log/user-updater/updater.log` and their rotated backups are readable by all users at the filesystem level, while the `logs --system` CLI command remains root-only. The desktop client can read the bounded system-output preview from shared state. User-only logs are at `~/.local/state/user_updater/updater.log`. Log files rotate through up to five 10 MiB backups. The application uses separate locks and state for system and per-user tasks, and cleans abandoned temporary builder accounts and sudoers entries before starting a later system update.
+Each task keeps the latest 20 metadata-only run summaries; output is not duplicated in history. Machine-wide logs at `/var/log/user-updater/updater.log` and their rotated backups are readable by all users at the filesystem level, while the `logs --system` CLI command remains root-only. The desktop client can read the bounded system-output preview from shared state. User-only logs are at `~/.local/state/user-updater/updater.log`. Log files rotate through up to five 10 MiB backups. The application uses separate locks and state for system and per-user tasks, and cleans abandoned temporary builder accounts and sudoers entries before starting a later system update.
 
 If a worker is interrupted while its state says `running`, the next scheduler tick records the run as failed, preserves its run ID and start time, and advances to the next normal scheduled occurrence. It does not automatically replay an interrupted update that may have partially changed the system. System output is written to the public-read, root-writable log, with a bounded preview shared in state; personal-tool output remains inspectable by its owner. Invalid persisted state is rejected rather than interpreted as permission to run an update. See [reliability testing](docs/reliability-testing.md) for the VM checklist.
 

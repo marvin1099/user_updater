@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Protocol
 from xml.sax.saxutils import escape
 
+from .paths import migrate_legacy_directory, migrate_user_data_dirs
 from .policy import default_policy_text, load_policy
 
 
@@ -32,15 +33,15 @@ class LinuxSystemdAdapter:
 
 @dataclass(frozen=True)
 class InstallPaths:
-    policy_file: Path = Path("/etc/user_updater/project.yaml")
-    state_dir: Path = Path("/var/lib/user_updater")
+    policy_file: Path = Path("/etc/user-updater/project.yaml")
+    state_dir: Path = Path("/var/lib/user-updater")
     unit_dir: Path = Path("/etc/systemd/system")
     autostart_dir: Path = Path("/etc/xdg/autostart")
     log_file: Path = Path("/var/log/user-updater/updater.log")
     executable: Path = Path("/usr/local/bin/user-updater")
-    polkit_action_file: Path = Path(
-        "/usr/share/polkit-1/actions/org.userupdater.policy"
-    )
+    polkit_action_file: Path = Path("/usr/share/polkit-1/actions/org.userupdater.policy")
+    legacy_policy_dir: Path | None = None
+    legacy_state_dir: Path | None = None
 
     @property
     def admin_helper(self) -> Path:
@@ -54,11 +55,11 @@ class UserInstallPaths:
 
     @property
     def policy_file(self) -> Path:
-        return self.home / ".config" / "user_updater" / "project.yaml"
+        return self.home / ".config" / "user-updater" / "project.yaml"
 
     @property
     def state_dir(self) -> Path:
-        return self.home / ".local" / "state" / "user_updater"
+        return self.home / ".local" / "state" / "user-updater"
 
     @property
     def unit_dir(self) -> Path:
@@ -82,6 +83,16 @@ class SystemInstaller:
 
     def install(self) -> None:
         paths = self.paths
+        legacy_policy_dir = paths.legacy_policy_dir
+        legacy_state_dir = paths.legacy_state_dir
+        if paths.policy_file == Path("/etc/user-updater/project.yaml"):
+            legacy_policy_dir = legacy_policy_dir or Path("/etc/user_updater")
+        if paths.state_dir == Path("/var/lib/user-updater"):
+            legacy_state_dir = legacy_state_dir or Path("/var/lib/user_updater")
+        if legacy_policy_dir is not None:
+            migrate_legacy_directory(legacy_policy_dir, paths.policy_file.parent)
+        if legacy_state_dir is not None:
+            migrate_legacy_directory(legacy_state_dir, paths.state_dir)
         paths.policy_file.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
         paths.state_dir.mkdir(mode=0o755, parents=True, exist_ok=True)
         paths.state_dir.chmod(0o755)
@@ -147,6 +158,7 @@ class UserInstaller:
 
     def install(self) -> None:
         paths = self.paths
+        migrate_user_data_dirs(paths.home, owner_uid=os.getuid())
         paths.policy_file.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         paths.state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         if not paths.policy_file.exists():

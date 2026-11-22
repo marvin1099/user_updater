@@ -519,8 +519,13 @@ def _retry_user() -> int:
 
 
 def _user_policy_for(user: DesktopUser, policy, logger):
+    preferences_path = user.home / ".config" / "user-updater" / "tool_preferences.json"
+    if not preferences_path.exists():
+        legacy_preferences_path = user.home / ".config" / "user_updater" / "tool_preferences.json"
+        if legacy_preferences_path.exists() or legacy_preferences_path.is_symlink():
+            preferences_path = legacy_preferences_path
     preferences = UserToolPreferenceStore(
-        user.home / ".config" / "user_updater" / "tool_preferences.json",
+        preferences_path,
         owner_uid=user.uid,
     )
     try:
@@ -706,7 +711,7 @@ def _write_admin_policy() -> int:
     if len(encoded) > 65_536:
         raise ValueError("administrator policy payload is too large")
     raw = json.loads(encoded)
-    saved = write_policy(Path("/etc/user_updater/project.yaml"), raw)
+    saved = write_policy(Path("/etc/user-updater/project.yaml"), raw)
     logger = configure_logging(Path("/var/log/user-updater/updater.log"))
     logger.info(
         "administrator policy changed: system=%s user_tools=%s interval_hours=%d custom_tools=%s",

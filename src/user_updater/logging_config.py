@@ -8,7 +8,7 @@ import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-_LOGGER_NAME = "user_updater"
+_LOGGER_NAME = "user-updater"
 _MAX_LOG_BYTES = 10 * 1024 * 1024
 _BACKUP_COUNT = 5
 

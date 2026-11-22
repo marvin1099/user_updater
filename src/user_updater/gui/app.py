@@ -9,7 +9,7 @@ from pathlib import Path
 from PySide6.QtGui import QAction, QIcon
 from PySide6.QtWidgets import QApplication, QMenu, QStyle, QSystemTrayIcon
 
-from ..paths import system_paths, user_paths
+from ..paths import migrate_user_data_dirs, system_paths, user_paths
 from ..policy import load_policy
 from ..requests import task_request_path
 from ..state import StateStore
@@ -24,6 +24,8 @@ def run_gui(system_mode: bool = False) -> int:
     application.setApplicationName("User Updater")
     application.setQuitOnLastWindowClosed(False)
     home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+    if system_mode:
+        migrate_user_data_dirs(home, owner_uid=os.getuid())
     paths = system_paths(home) if system_mode else user_paths(home)
     policy = load_policy(paths.policy if paths.policy.exists() else None)
     user_state_path = paths.user_state_dir / f"{os.getuid()}.json" if system_mode else paths.state
@@ -32,7 +34,7 @@ def run_gui(system_mode: bool = False) -> int:
     user_request = task_request_path(home, "user-tools")
     system_request = task_request_path(home, "system") if system_mode else None
     user_tool_preferences = UserToolPreferenceStore(
-        home / ".config" / "user_updater" / "tool_preferences.json",
+        home / ".config" / "user-updater" / "tool_preferences.json",
         owner_uid=os.getuid(),
     )
     window = UpdaterWindow(

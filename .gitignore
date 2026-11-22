@@ -6,6 +6,6 @@ __pycache__/
 dist/
 build/
 *.egg-info/
-user_updater.log
+user-updater.log
 state.json
 request.json

@@ -155,6 +155,15 @@ class AdminSettingsDialog(QDialog):
         testing_note.setWordWrap(True)
         testing_form.addRow(testing_note)
         self.testing_section = CollapsibleSection("Testing", testing_content, expanded=False)
+        self.testing_section.setObjectName("testingSection")
+        self.testing_section.content.setObjectName("testingSectionContent")
+        self.testing_section.setStyleSheet(
+            "QWidget#testingSection { border: none; }"
+            "QWidget#testingSection QToolButton { border: none; background: transparent; }"
+        )
+        self.testing_section.content.setStyleSheet(
+            "QWidget#testingSectionContent { border: none; }"
+        )
         form.addRow(self.testing_section)
 
         interaction = QGroupBox("Rescheduling")
@@ -192,7 +201,7 @@ class AdminSettingsDialog(QDialog):
         tools_layout.addWidget(self.allow_custom_tools)
         scripts_note = QLabel(
             "When enabled, executable scripts in each user's "
-            "~/.config/user_updater/tools.d directory run as that user during "
+            "~/.config/user-updater/tools.d directory run as that user during "
             "personal-tool updates."
         )
         scripts_note.setWordWrap(True)

@@ -45,9 +45,14 @@ def test_pending_window_offers_only_admin_allowed_reschedule_and_update_now(
 
     assert window.isVisible()
     assert bool(window.windowFlags() & Qt.WindowType.FramelessWindowHint)
-    assert window.update_now_button.isVisible()
     assert window.defer_button.isVisible()
-    assert window.defer_choice.count() == 3
+    assert window.defer_choice.count() == 4
+    assert window.defer_choice.findData("now") >= 0
+    assert window.defer_choice.itemText(0) == "1h"
+    assert window.defer_button.text() == "Confirm"
+    assert window.user_panel.countdown.text().startswith("Autostarts in:")
+    assert window.user_panel.layout().count() == 1
+    assert window.user_panel.status.y() == window.user_panel.countdown.y()
     app.processEvents()
     window.close()
     assert window.isHidden()
@@ -72,12 +77,11 @@ def test_user_reschedule_choices_shrink_to_fit_the_remaining_time(tmp_path: Path
     window = UpdaterWindow(load_policy(), store, tmp_path / "request.json", start_timer=False)
 
     assert [
-        window.defer_choice.itemData(index) for index in range(window.defer_choice.count())
-    ] == [
-        1,
-        4,
-        13,
-    ]
+        window.defer_choice.itemData(index)
+        for index in range(window.defer_choice.count())
+        if isinstance(window.defer_choice.itemData(index), int)
+    ] == [1, 4, 13]
+    assert window.defer_choice.findData("now") >= 0
     window.deleteLater()
 
 
@@ -94,6 +98,24 @@ def test_defer_button_writes_a_user_request_for_the_current_run(tmp_path: Path) 
 
     assert '"run_id":"run-42"' in request_file.read_text(encoding="utf-8")
     assert '"hours":4' in request_file.read_text(encoding="utf-8")
+    window.deleteLater()
+
+
+def test_compact_confirmation_can_start_personal_tools_now(tmp_path: Path) -> None:
+    _application()
+    store = StateStore(tmp_path / "state.json")
+    store.save(UpdateState(phase="awaiting_response", run_id="run-now"))
+    request_file = tmp_path / "request.json"
+    window = UpdaterWindow(load_policy(), store, request_file, start_timer=False)
+    window.refresh()
+
+    index = window.defer_choice.findData("now")
+    assert index >= 0
+    window.defer_choice.setCurrentIndex(index)
+    assert window.user_panel.run_label.text() == "Run at"
+    window.defer_button.click()
+
+    assert '"action":"start_now"' in request_file.read_text(encoding="utf-8")
     window.deleteLater()
 
 
@@ -116,8 +138,11 @@ def test_system_rescheduling_preview_is_isolated_and_has_no_update_now(tmp_path:
     buttons = {button.text(): button for button in preview.findChildren(QPushButton)}
 
     assert preview.isVisible()
-    assert "Reschedule" in buttons
-    assert not buttons["Update now"].isVisible()
+    assert "Confirm" in buttons
+    assert "Update now" not in buttons
+    preview_choice = preview.findChild(type(window.defer_choice))
+    assert preview_choice is not None
+    assert preview_choice.findData("now") == -1
     assert system_store.load().phase == "idle"
     assert user_store.load().phase == "idle"
     preview.close()
@@ -139,7 +164,7 @@ def test_closing_running_window_hides_only_the_ui_and_does_not_cancel_update(
     assert window.isHidden()
     assert store.load().phase == "running"
     assert bool(window.windowFlags() & Qt.WindowType.FramelessWindowHint)
-    assert window.update_now_button.isHidden()
+    assert window.defer_choice.isHidden()
     assert window.defer_button.isHidden()
     window.refresh()
     assert window.isHidden()
@@ -290,7 +315,8 @@ def test_admin_settings_dialog_builds_a_valid_policy_mapping(tmp_path: Path) -> 
     assert dialog.schedule_group.title() == "Update schedules"
     dialog.testing_section.header.click()
     assert dialog.testing_section.is_expanded()
-    assert dialog.testing_section.styleSheet() == ""
+    assert "border: none" in dialog.testing_section.styleSheet()
+    assert "border: none" in dialog.testing_section.content.styleSheet()
 
     mapping = dialog.policy_mapping()
 
@@ -319,7 +345,7 @@ def test_admin_settings_dialog_builds_a_valid_policy_mapping(tmp_path: Path) -> 
     assert dialog.testing_section.header.x() < dialog.testing_section.width() / 2
     dialog.testing_section.header.click()
     assert not dialog.testing_section.is_expanded()
-    assert dialog.testing_section.styleSheet() == ""
+    assert "border: none" in dialog.testing_section.styleSheet()
     dialog.deleteLater()
 
 
@@ -489,8 +515,12 @@ def test_system_window_keeps_system_and_user_responses_separate(tmp_path: Path) 
         system_request_file=task_request_path(home, "system"),
     )
 
-    assert window.system_panel.update_now_button.isHidden()
-    window.system_panel.update_now_button.click()
+    assert window.system_panel.status.text() == "System update: Waiting"
+    assert window.user_panel.status.text() == "Your user tools: Waiting"
+    assert window.system_panel.run_label.text() == "Run in"
+    assert window.user_panel.run_label.text() == "Run in"
+    assert window.system_panel.countdown.text().startswith("Autostarts in:")
+    assert window.system_panel.defer_choice.findData("now") == -1
     window.system_panel.defer_choice.setCurrentIndex(0)
     window.system_panel.defer_button.click()
     window.user_panel.defer_choice.setCurrentIndex(1)
@@ -676,6 +706,7 @@ def test_full_details_has_collapsible_task_sections_and_returns_after_completion
     assert abs(window.system_section.height() - window.user_section.height()) <= 12
     assert window.system_tab.terminal.isReadOnly()
     assert window.user_tab.terminal.isReadOnly()
+    assert window.system_tab.tools_section.isHidden()
     system_output = window.system_tab.terminal.toPlainText().splitlines()
     assert len(system_output) == 200
     assert system_output[0] == "system line 50"
@@ -718,6 +749,37 @@ def test_details_single_open_section_uses_available_height(tmp_path: Path) -> No
     assert window.user_section.is_expanded()
     assert abs(window.system_section.height() - window.user_section.height()) <= 12
 
+    window.deleteLater()
+
+
+def test_expanding_update_section_scrolls_terminal_to_bottom_left(tmp_path: Path) -> None:
+    app = _application()
+    system_store = StateStore(tmp_path / "system.json")
+    user_store = StateStore(tmp_path / "user.json")
+    system_store.save(
+        UpdateState(
+            phase="running",
+            run_id="system-run",
+            last_output=tuple(f"{index:03} " + ("long output line " * 30) for index in range(300)),
+        )
+    )
+    window = FullDetailsWindow(system_store, user_store)
+    window.show()
+    app.processEvents()
+
+    terminal = window.system_tab.terminal
+    assert terminal.verticalScrollBar().maximum() > 0
+    assert terminal.horizontalScrollBar().maximum() > 0
+    window.system_section.set_expanded(False)
+    app.processEvents()
+    terminal.verticalScrollBar().setValue(0)
+    terminal.horizontalScrollBar().setValue(terminal.horizontalScrollBar().maximum())
+
+    window.system_section.header.click()
+    app.processEvents()
+
+    assert terminal.verticalScrollBar().value() == terminal.verticalScrollBar().maximum()
+    assert terminal.horizontalScrollBar().value() == terminal.horizontalScrollBar().minimum()
     window.deleteLater()
 
 
@@ -892,6 +954,8 @@ def test_users_can_toggle_only_admin_enabled_personal_tools(tmp_path: Path) -> N
     assert all(check.isChecked() for check in window.user_tab.tool_checkboxes.values())
     assert "tools.d" in window.user_tab.custom_tools_checkbox.text()
     assert window.user_tab.custom_tools_checkbox.isChecked()
+    assert window.system_tab.tools_section.isHidden()
+    assert not window.user_tab.tools_section.isHidden()
     assert not window.user_tab.tools_section.is_expanded()
     window.show()
     app.processEvents()

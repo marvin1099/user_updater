@@ -66,7 +66,7 @@ class _TaskTab(QWidget):
         self.tool_check_layout = QHBoxLayout(self.tool_checks_widget)
         self.tool_check_layout.setContentsMargins(0, 0, 0, 0)
         self.tool_checkboxes: dict[str, QCheckBox] = {}
-        self.custom_tools_checkbox = QCheckBox("Run my scripts from ~/.config/user_updater/tools.d")
+        self.custom_tools_checkbox = QCheckBox("Run my scripts from ~/.config/user-updater/tools.d")
         self.custom_tools_checkbox.setObjectName("customToolScripts")
         self.tool_preferences_status = QLabel("")
         self.save_tools_button = QPushButton("Save tool choices")
@@ -229,6 +229,7 @@ class FullDetailsWindow(QWidget):
         title = QLabel("Update details")
         title.setStyleSheet("font-size: 16px; font-weight: 700;")
         self.system_tab = _TaskTab("System updates")
+        self.system_tab.tools_section.hide()
         self.user_tab = _TaskTab("User tools")
         self.history_view = QPlainTextEdit()
         self.history_view.setObjectName("runHistory")
@@ -249,6 +250,15 @@ class FullDetailsWindow(QWidget):
         for section in (self.system_section, self.user_section, self.history_section):
             section.header.setObjectName("detailsSectionToggle")
             section.header.toggled.connect(self._update_empty_state)
+        self.system_section.header.toggled.connect(
+            lambda expanded: expanded and self._scroll_terminal_to_bottom_left(self.system_tab)
+        )
+        self.user_section.header.toggled.connect(
+            lambda expanded: expanded and self._scroll_terminal_to_bottom_left(self.user_tab)
+        )
+        self.user_tab.tools_section.header.toggled.connect(
+            lambda expanded: expanded and self._scroll_terminal_to_bottom_left(self.user_tab)
+        )
         section_tabs = QHBoxLayout()
         section_tabs.setContentsMargins(0, 0, 0, 0)
         section_tabs.setSpacing(4)
@@ -366,6 +376,15 @@ class FullDetailsWindow(QWidget):
             for section in (self.system_section, self.user_section, self.history_section)
         )
         self.empty_state.setVisible(not sections_open)
+
+    @staticmethod
+    def _scroll_terminal_to_bottom_left(tab: _TaskTab) -> None:
+        def scroll() -> None:
+            terminal = tab.terminal
+            terminal.verticalScrollBar().setValue(terminal.verticalScrollBar().maximum())
+            terminal.horizontalScrollBar().setValue(terminal.horizontalScrollBar().minimum())
+
+        QTimer.singleShot(0, scroll)
 
     def position_bottom_right(self) -> None:
         """Place the details window at the bottom right when the compositor allows it."""

@@ -13,7 +13,13 @@ from user_updater.policy import (
     policy_to_mapping,
     validate_policy_data,
 )
-from user_updater.requests import UserRequest, request_path, save_request, task_request_path
+from user_updater.requests import (
+    UserRequest,
+    legacy_task_request_path,
+    request_path,
+    save_request,
+    task_request_path,
+)
 from user_updater.service import RequestHome, UpdateService
 from user_updater.state import StateStore, UpdateState
 from user_updater.workflow import WorkflowResult
@@ -112,6 +118,38 @@ def test_system_service_reads_user_reschedule_requests(tmp_path: Path) -> None:
     run_id = state_store.load().run_id
     save_request(
         task_request_path(user_home, "system"),
+        UserRequest(
+            run_id or "",
+            "defer",
+            1,
+            submitted_at=(NOW + timedelta(minutes=1)).isoformat(),
+        ),
+    )
+
+    service.tick(NOW + timedelta(minutes=1))
+
+    assert state_store.load().phase == "deferred"
+    assert state_store.load().deferred_until == (NOW + timedelta(hours=1, minutes=1)).isoformat()
+
+
+def test_system_service_reads_legacy_underscore_request_path(tmp_path: Path) -> None:
+    policy = load_policy()
+    state_store = StateStore(tmp_path / "system-state.json")
+    state_store.save(UpdateState(next_scheduled_at=NOW.isoformat()))
+    user_home = tmp_path / "alice"
+    user_home.mkdir()
+    service = UpdateService(
+        policy,
+        state_store,
+        FakeWorkflow(),
+        request_homes=lambda: [RequestHome(user_home, os.getuid())],
+        task_id="system",
+    )
+
+    service.tick(NOW)
+    run_id = state_store.load().run_id
+    save_request(
+        legacy_task_request_path(user_home, "system"),
         UserRequest(
             run_id or "",
             "defer",

@@ -90,9 +90,7 @@ class UserToolUpdater:
             )
         if allow_custom_tools:
             results.extend(
-                self._run_custom_tools(
-                    user, env, on_output, on_idle, on_progress, on_progress_end
-                )
+                self._run_custom_tools(user, env, on_output, on_idle, on_progress, on_progress_end)
             )
         return results
 
@@ -105,7 +103,11 @@ class UserToolUpdater:
         on_progress: Progress | None = None,
         on_progress_end: ProgressEnd | None = None,
     ) -> list[ToolResult]:
-        directory = user.home / ".config" / "user_updater" / "tools.d"
+        directory = user.home / ".config" / "user-updater" / "tools.d"
+        if not directory.exists():
+            legacy_directory = user.home / ".config" / "user_updater" / "tools.d"
+            if legacy_directory.exists() or legacy_directory.is_symlink():
+                directory = legacy_directory
         try:
             metadata = directory.stat(follow_symlinks=False)
         except FileNotFoundError:

@@ -21,11 +21,25 @@ class UserRequest:
 
 
 def request_path(home: Path) -> Path:
-    return Path(home) / ".local" / "state" / "user_updater" / "request.json"
+    return Path(home) / ".local" / "state" / "user-updater" / "request.json"
 
 
 def task_request_path(home: Path, task_id: str) -> Path:
     """Return an isolated request file for one independently scheduled task."""
+    if not task_id or any(
+        character not in "abcdefghijklmnopqrstuvwxyz0123456789-_" for character in task_id
+    ):
+        raise ValueError("task_id contains unsupported characters")
+    return Path(home) / ".local" / "state" / "user-updater" / "requests" / f"{task_id}.json"
+
+
+def legacy_request_path(home: Path) -> Path:
+    """Return the pre-rename request path for reading pending legacy requests."""
+    return Path(home) / ".local" / "state" / "user_updater" / "request.json"
+
+
+def legacy_task_request_path(home: Path, task_id: str) -> Path:
+    """Return a pre-rename task request path for compatibility reads."""
     if not task_id or any(
         character not in "abcdefghijklmnopqrstuvwxyz0123456789-_" for character in task_id
     ):

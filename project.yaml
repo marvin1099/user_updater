@@ -1,5 +1,5 @@
 # Administrator policy. The system installer copies this to
-# /etc/user_updater/project.yaml. User requests are limited by this policy.
+# /etc/user-updater/project.yaml. User requests are limited by this policy.
 version: 1
 
 schedule:

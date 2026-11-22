@@ -2,6 +2,7 @@ from pathlib import Path
 from xml.etree import ElementTree
 
 from user_updater.installer import InstallPaths, SystemInstaller, UserInstaller, UserInstallPaths
+from user_updater.paths import user_paths
 from user_updater.policy import load_policy
 
 
@@ -15,8 +16,8 @@ class FakeSystemd:
 
 def test_system_autostart_applies_to_users_added_after_install(tmp_path: Path) -> None:
     paths = InstallPaths(
-        policy_file=tmp_path / "etc" / "user_updater" / "project.yaml",
-        state_dir=tmp_path / "var" / "lib" / "user_updater",
+        policy_file=tmp_path / "etc" / "user-updater" / "project.yaml",
+        state_dir=tmp_path / "var" / "lib" / "user-updater",
         unit_dir=tmp_path / "systemd" / "system",
         autostart_dir=tmp_path / "etc" / "xdg" / "autostart",
         log_file=tmp_path / "log" / "updater.log",
@@ -39,8 +40,8 @@ def test_system_install_creates_admin_policy_service_timer_and_global_autostart(
     tmp_path: Path,
 ) -> None:
     paths = InstallPaths(
-        policy_file=tmp_path / "etc" / "user_updater" / "project.yaml",
-        state_dir=tmp_path / "var" / "lib" / "user_updater",
+        policy_file=tmp_path / "etc" / "user-updater" / "project.yaml",
+        state_dir=tmp_path / "var" / "lib" / "user-updater",
         unit_dir=tmp_path / "systemd" / "system",
         autostart_dir=tmp_path / "xdg" / "autostart",
         log_file=tmp_path / "log" / "updater.log",
@@ -73,6 +74,35 @@ def test_system_install_creates_admin_policy_service_timer_and_global_autostart(
     assert paths.log_file.parent.is_dir()
     assert paths.log_file.parent.stat().st_mode & 0o777 == 0o755
     assert systemd.calls[-1] == ["enable", "--now", "user-updater.timer"]
+
+
+def test_system_install_migrates_legacy_underscore_directories(tmp_path: Path) -> None:
+    legacy_policy_dir = tmp_path / "etc" / "user_updater"
+    legacy_state_dir = tmp_path / "var" / "lib" / "user_updater"
+    legacy_policy_dir.mkdir(parents=True)
+    legacy_state_dir.mkdir(parents=True)
+    (legacy_policy_dir / "project.yaml").write_text(
+        "version: 1\ninteraction:\n  allow_deferral: false\n", encoding="utf-8"
+    )
+    (legacy_state_dir / "state.json").write_text("preserve me", encoding="utf-8")
+    paths = InstallPaths(
+        policy_file=tmp_path / "etc" / "user-updater" / "project.yaml",
+        state_dir=tmp_path / "var" / "lib" / "user-updater",
+        unit_dir=tmp_path / "systemd",
+        autostart_dir=tmp_path / "autostart",
+        log_file=tmp_path / "log" / "updater.log",
+        executable=Path("/usr/local/bin/user-updater"),
+        polkit_action_file=tmp_path / "polkit" / "org.userupdater.policy",
+        legacy_policy_dir=legacy_policy_dir,
+        legacy_state_dir=legacy_state_dir,
+    )
+
+    SystemInstaller(paths, systemd=FakeSystemd()).install()
+
+    assert load_policy(paths.policy_file).interaction.allow_deferral is False
+    assert (paths.state_dir / "state.json").read_text(encoding="utf-8") == "preserve me"
+    assert not legacy_policy_dir.exists()
+    assert not legacy_state_dir.exists()
 
 
 def test_system_reinstall_preserves_admin_policy_and_uninstall_preserves_data(
@@ -122,6 +152,29 @@ def test_user_install_defaults_to_user_tools_only(tmp_path: Path) -> None:
     assert policy.updates.run_user_tools is True
     assert "tick --user" in service.read_text(encoding="utf-8")
     assert "gui --user" in autostart.read_text(encoding="utf-8")
+
+
+def test_user_install_migrates_legacy_user_data_directories(tmp_path: Path) -> None:
+    home = tmp_path / "alice"
+    old_config = home / ".config" / "user_updater"
+    old_state = home / ".local" / "state" / "user_updater"
+    old_config.mkdir(parents=True)
+    old_state.mkdir(parents=True)
+    (old_config / "project.yaml").write_text(
+        "version: 1\nupdates:\n  run_system: false\n", encoding="utf-8"
+    )
+    (old_config / "tool_preferences.json").write_text("prefs", encoding="utf-8")
+    (old_state / "updater.log").write_text("log", encoding="utf-8")
+    paths = UserInstallPaths(home=home, executable=Path("/home/alice/.local/bin/user-updater"))
+
+    UserInstaller(paths, systemd=FakeSystemd()).install()
+    resolved = user_paths(home)
+
+    assert resolved.policy == home / ".config" / "user-updater" / "project.yaml"
+    assert (resolved.policy.parent / "tool_preferences.json").read_text() == "prefs"
+    assert (resolved.user_state_dir / "updater.log").read_text() == "log"
+    assert not old_config.exists()
+    assert not old_state.exists()
 
 
 def test_user_install_escapes_spaces_in_systemd_and_desktop_paths(tmp_path: Path) -> None:

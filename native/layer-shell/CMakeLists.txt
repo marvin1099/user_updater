@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(user_updater_layer_shell LANGUAGES CXX)
+project(user-updater-layer-shell LANGUAGES CXX)
 
 find_package(Qt6 REQUIRED COMPONENTS Widgets)
 find_package(LayerShellQt REQUIRED)

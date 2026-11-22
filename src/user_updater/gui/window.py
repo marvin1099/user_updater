@@ -56,29 +56,28 @@ class _TaskPanel(QWidget):
         self.elapsed.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.elapsed.hide()
         self.countdown = QLabel("")
+        self.countdown.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.defer_choice = QComboBox()
-        self.defer_button = QPushButton("Reschedule")
-        self.update_now_button = QPushButton("Update now")
-        self.update_now_button.setObjectName("primary")
-        controls = QHBoxLayout()
-        controls.addWidget(self.defer_choice, stretch=1)
-        controls.addWidget(self.defer_button)
-        controls.addWidget(self.update_now_button)
+        self.run_label = QLabel("Run in")
+        self.defer_button = QPushButton("Confirm")
+        self.defer_button.setObjectName("primary")
+        self.defer_choice.currentIndexChanged.connect(self._update_run_label)
         status_row = QHBoxLayout()
         status_row.setContentsMargins(0, 0, 0, 0)
-        status_row.setSpacing(8)
+        status_row.setSpacing(5)
         status_row.addWidget(self.elapsed)
         status_row.addWidget(self.status, stretch=1)
+        status_row.addWidget(self.run_label)
+        status_row.addWidget(self.defer_choice)
+        status_row.addWidget(self.defer_button)
+        status_row.addWidget(self.countdown)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 2, 8, 2)
-        layout.setSpacing(2)
+        layout.setSpacing(0)
         layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         layout.addLayout(status_row)
-        layout.addWidget(self.countdown)
-        layout.addLayout(controls)
 
         self.defer_button.clicked.connect(self._submit_defer)
-        self.update_now_button.clicked.connect(self._submit_start_now)
         self.hide()
 
     def apply_state(self, state: UpdateState) -> None:
@@ -99,17 +98,17 @@ class _TaskPanel(QWidget):
         self.setVisible(show_panel)
         response_open = state.phase == "awaiting_response"
         self.countdown.setVisible(response_open)
+        self.run_label.hide()
         self.defer_choice.hide()
         self.defer_button.hide()
-        self.update_now_button.setVisible(response_open and self.allow_start_now)
         if response_open:
             remaining = _remaining_seconds(state.response_deadline)
             if remaining is None:
-                self.countdown.setText("No response means the update starts automatically.")
+                self.countdown.setText("Autostarts when the response window ends.")
             else:
                 minutes, seconds = divmod(remaining, 60)
-                self.countdown.setText(f"Automatic start in {minutes}:{seconds:02d}.")
-            selected_hours = self.defer_choice.currentData()
+                self.countdown.setText(f"Autostarts in: {minutes}:{seconds:02d}")
+            selected = self.defer_choice.currentData()
             self.defer_choice.clear()
             allowed_hours = available_reschedule_hours(
                 self.policy,
@@ -119,17 +118,28 @@ class _TaskPanel(QWidget):
             )
             for hours in allowed_hours:
                 self.defer_choice.addItem(_duration_label(hours), hours)
-            if selected_hours in allowed_hours:
-                self.defer_choice.setCurrentIndex(allowed_hours.index(selected_hours))
-            self.defer_choice.setVisible(bool(allowed_hours))
-            self.defer_button.setVisible(bool(allowed_hours))
-            for control in (self.defer_choice, self.defer_button, self.update_now_button):
+            if self.allow_start_now:
+                self.defer_choice.addItem("now", "now")
+            if selected is not None and self.defer_choice.findData(selected) >= 0:
+                self.defer_choice.setCurrentIndex(self.defer_choice.findData(selected))
+            elif allowed_hours:
+                self.defer_choice.setCurrentIndex(0)
+            can_confirm = self.defer_choice.count() > 0
+            self.run_label.setVisible(can_confirm)
+            self.defer_choice.setVisible(can_confirm)
+            self.defer_button.setVisible(can_confirm)
+            for control in (self.defer_choice, self.defer_button):
                 control.setEnabled(not self._request_sent)
+            self.status.setText(f"{self.title}: Waiting")
             if self._request_sent:
                 self.status.setText(f"{self.title}: response sent; waiting for the updater.")
 
     def _submit_defer(self) -> None:
-        hours = self.defer_choice.currentData()
+        selection = self.defer_choice.currentData()
+        if selection == "now":
+            self._submit_start_now()
+            return
+        hours = selection
         if self._state.run_id is None or hours is None:
             return
         if int(hours) not in available_reschedule_hours(
@@ -140,6 +150,9 @@ class _TaskPanel(QWidget):
         ):
             return
         self._save(UserRequest(self._state.run_id, "defer", int(hours)))
+
+    def _update_run_label(self, _index: int) -> None:
+        self.run_label.setText("Run at" if self.defer_choice.currentData() == "now" else "Run in")
 
     def _submit_start_now(self) -> None:
         if not self.allow_start_now:
@@ -280,10 +293,9 @@ class UpdaterWindow(QWidget):
         layout.addLayout(retry_buttons)
 
         self.close_button.clicked.connect(self.close)
-        # Backwards-compatible button access for user-only clients and tests.
+        # Backwards-compatible control access for user-only clients and tests.
         self.defer_choice = self.user_panel.defer_choice
         self.defer_button = self.user_panel.defer_button
-        self.update_now_button = self.user_panel.update_now_button
         self.retry_buttons = retry_buttons
 
     @property
@@ -608,11 +620,11 @@ class UpdaterWindow(QWidget):
 
 def _duration_label(hours: int) -> str:
     if hours < 24:
-        return f"Reschedule {hours} hour{'s' if hours != 1 else ''}"
+        return f"{hours}h"
     days, remainder = divmod(hours, 24)
     if remainder:
-        return f"Reschedule {days} day(s), {remainder} hour(s)"
-    return f"Reschedule {days} day{'s' if days != 1 else ''}"
+        return f"{days}d {remainder}h"
+    return f"{days}d"
 
 
 def _remaining_seconds(deadline: str | None) -> int | None:
