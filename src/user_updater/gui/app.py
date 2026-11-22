@@ -51,6 +51,7 @@ def run_gui(system_mode: bool = False) -> int:
         system_enabled=system_mode and policy.updates.run_system,
         user_tools_enabled=policy.updates.run_user_tools,
         user_request_file=user_request,
+        log_file=paths.log_file,
         system_output_visible=True,
         system_manual_retry_limit=policy.retry.system.user_manual_attempts,
         user_manual_retry_limit=policy.retry.user_tools.user_manual_attempts,

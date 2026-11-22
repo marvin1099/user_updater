@@ -18,7 +18,7 @@ from .accounts import BuilderAccountManager
 from .coordinator import TickAction
 from .history import HistoryError, RunHistoryStore, RunRecord, history_path_for_state
 from .installer import InstallPaths, SystemInstaller, UserInstaller, UserInstallPaths
-from .logging_config import configure_logging
+from .logging_config import configure_logging, current_log_path
 from .paths import system_paths, user_paths
 from .policy import PolicyError, consume_test_outcome, load_policy, write_policy
 from .requests import UserRequest, save_request, task_request_path
@@ -708,7 +708,8 @@ def _logs(system_mode: bool, lines: int, output: Path | None) -> int:
     paths = system_paths() if system_mode else user_paths()
     if system_mode:
         _require_root("machine-wide log access")
-    content = paths.log_file.read_bytes()
+    log_file = current_log_path(paths.log_file)
+    content = log_file.read_bytes()
     if output is not None:
         destination = Path(output)
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC

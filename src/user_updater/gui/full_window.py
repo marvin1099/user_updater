@@ -4,16 +4,24 @@ from __future__ import annotations
 
 import re
 from dataclasses import replace
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QFontDatabase, QTextCharFormat
+from PySide6.QtCore import Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import (
+    QColor,
+    QDesktopServices,
+    QFont,
+    QFontDatabase,
+    QPalette,
+    QTextCharFormat,
+)
 from PySide6.QtWidgets import (
     QCheckBox,
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QVBoxLayout,
@@ -21,6 +29,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..history import HistoryError, RunHistoryStore, RunRecord, history_path_for_state
+from ..logging_config import current_log_path
 from ..requests import UserRequest, save_request
 from ..state import StateError, StateStore, UpdateState
 from ..tool_preferences import ToolPreferenceError, UserToolPreferenceStore
@@ -47,10 +56,6 @@ _ANSI_COLORS = (
     "#55ffff",
     "#ffffff",
 )
-_TERMINAL_FOREGROUND = QColor("#dbe7f1")
-_TERMINAL_BACKGROUND = QColor("#11151a")
-
-
 class _TaskTab(QWidget):
     def __init__(self, title: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -90,7 +95,6 @@ class _TaskTab(QWidget):
         self.terminal.setReadOnly(True)
         self.terminal.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         self.terminal.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
-        self.terminal.setStyleSheet("QPlainTextEdit { background: #11151a; color: #dbe7f1; }")
         layout = QVBoxLayout(self)
         heading = QHBoxLayout()
         heading.addWidget(self.status, stretch=1)
@@ -163,6 +167,7 @@ class FullDetailsWindow(QWidget):
         system_enabled: bool = True,
         user_tools_enabled: bool = True,
         user_request_file: Path | None = None,
+        log_file: Path | None = None,
         system_output_visible: bool = True,
         system_manual_retry_limit: int = 0,
         user_manual_retry_limit: int = 0,
@@ -186,6 +191,9 @@ class FullDetailsWindow(QWidget):
         self.system_automatic_retry_limit = system_automatic_retry_limit
         self.user_automatic_retry_limit = user_automatic_retry_limit
         self.user_request_file = Path(user_request_file) if user_request_file else None
+        self.log_file = Path(log_file) if log_file is not None else None
+        self._active_log_date: date | None = None
+        self._history_text: str | None = None
         self.user_tool_preferences = user_tool_preferences
         self.admin_allowed_user_tools = tuple(admin_allowed_user_tools)
         self.admin_allows_custom_tools = admin_allows_custom_tools
@@ -208,18 +216,9 @@ class FullDetailsWindow(QWidget):
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.Tool
         )
+        self.setAutoFillBackground(True)
         self.resize(840, 680)
         self.setMinimumSize(640, 500)
-        self.setStyleSheet(
-            "QWidget { background: #20242b; color: #f2f4f8; }"
-            "QCheckBox#detailsSectionToggle {"
-            "padding: 7px 12px; border: 1px solid #48515d; border-radius: 4px;"
-            "background: #292e36;"
-            "}"
-            "QCheckBox#detailsSectionToggle:checked {"
-            "background: #36536d; border-color: #79a9d6;"
-            "}"
-        )
         self._placement = WindowPlacement(
             self,
             title=self.windowTitle(),
@@ -227,7 +226,10 @@ class FullDetailsWindow(QWidget):
         )
 
         title = QLabel("Update details")
-        title.setStyleSheet("font-size: 16px; font-weight: 700;")
+        title_font = QFont(title.font())
+        title_font.setPointSize(max(title_font.pointSize() + 2, 12))
+        title_font.setBold(True)
+        title.setFont(title_font)
         self.system_tab = _TaskTab("System updates")
         self.system_tab.tools_section.hide()
         self.user_tab = _TaskTab("User tools")
@@ -279,6 +281,10 @@ class FullDetailsWindow(QWidget):
         self._configure_user_tool_choices()
         self.back_button = QPushButton("Back to minimal view")
         self.back_button.clicked.connect(self._return_to_minimal)
+        self.open_log_button = QPushButton("Open current log")
+        self.open_log_button.setObjectName("openCurrentLog")
+        self.open_log_button.setToolTip("Open the current updater log in your default viewer.")
+        self.open_log_button.clicked.connect(self._open_current_log)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 12, 14, 12)
@@ -288,6 +294,7 @@ class FullDetailsWindow(QWidget):
         controls = QHBoxLayout()
         controls.addStretch(1)
         controls.addWidget(self.back_button)
+        controls.addWidget(self.open_log_button)
         layout.addLayout(controls)
 
         self._timer = QTimer(self)
@@ -302,6 +309,8 @@ class FullDetailsWindow(QWidget):
             include_output=self.system_output_visible,
         )
         user_state = self._read_state(self.user_state_store, self.user_tools_enabled)
+        self._active_log_date = _active_log_date(system_state, user_state)
+        self._update_open_log_button()
         if user_state.run_id != self._user_retry_requested_for:
             self._user_retry_requested_for = None
         if self._system_retry_requested_for is not None and (
@@ -513,7 +522,43 @@ class FullDetailsWindow(QWidget):
             for record in records
         ]
         lines.extend(f"History unavailable: {error}" for error in errors)
-        self.history_view.setPlainText("\n".join(lines))
+        text = "\n".join(lines)
+        if text == self._history_text:
+            return
+        vertical_position = self.history_view.verticalScrollBar().value()
+        horizontal_position = self.history_view.horizontalScrollBar().value()
+        self.history_view.setPlainText(text)
+        self.history_view.verticalScrollBar().setValue(vertical_position)
+        self.history_view.horizontalScrollBar().setValue(horizontal_position)
+        self._history_text = text
+
+    def _update_open_log_button(self) -> None:
+        path = self._current_log_path()
+        self.open_log_button.setEnabled(
+            path is not None and path.is_file() and not path.is_symlink()
+        )
+
+    def _current_log_path(self) -> Path | None:
+        if self.log_file is None:
+            return None
+        return current_log_path(self.log_file, self._active_log_date)
+
+    def _open_current_log(self) -> None:
+        path = self._current_log_path()
+        if path is None or path.is_symlink() or not path.is_file():
+            QMessageBox.information(
+                self,
+                "Current log",
+                "The current updater log is not available.",
+            )
+            self._update_open_log_button()
+            return
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))):
+            QMessageBox.warning(
+                self,
+                "Open current log",
+                f"Could not open the updater log:\n{path}",
+            )
 
     def _return_to_minimal(self) -> None:
         self.hide()
@@ -542,13 +587,28 @@ def _elapsed_text(state: UpdateState) -> str:
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
 
+def _active_log_date(*states: UpdateState) -> date | None:
+    """Use the start date of the latest active task to find its pinned daily log."""
+    active_starts: list[datetime] = []
+    for state in states:
+        if state.phase != "running" or state.started_at is None:
+            continue
+        try:
+            active_starts.append(datetime.fromisoformat(state.started_at).astimezone())
+        except (OverflowError, OSError, ValueError):
+            continue
+    return max(active_starts).date() if active_starts else None
+
+
 class _TerminalStyle:
-    def __init__(self) -> None:
+    def __init__(self, foreground: QColor, background: QColor) -> None:
+        self.default_foreground = QColor(foreground)
+        self.default_background = QColor(background)
         self.reset()
 
     def reset(self) -> None:
-        self.foreground = QColor(_TERMINAL_FOREGROUND)
-        self.background = QColor(_TERMINAL_BACKGROUND)
+        self.foreground = QColor(self.default_foreground)
+        self.background = QColor(self.default_background)
         self.bold = False
         self.dim = False
         self.italic = False
@@ -575,7 +635,11 @@ def _render_terminal_text(terminal: QPlainTextEdit, text: str) -> None:
     """Render the read-only output pane with ANSI SGR colors and text styles."""
     terminal.clear()
     cursor = terminal.textCursor()
-    style = _TerminalStyle()
+    palette = terminal.palette()
+    style = _TerminalStyle(
+        palette.color(QPalette.ColorRole.Text),
+        palette.color(QPalette.ColorRole.Base),
+    )
     lines = text.split("\n")
     for line_number, line in enumerate(lines):
         offset = 0
@@ -627,13 +691,13 @@ def _apply_sgr(style: _TerminalStyle, parameters: str) -> None:
         elif 90 <= code <= 97:
             style.foreground = QColor(_ANSI_COLORS[code - 90 + 8])
         elif code == 39:
-            style.foreground = QColor(_TERMINAL_FOREGROUND)
+            style.foreground = QColor(style.default_foreground)
         elif 40 <= code <= 47:
             style.background = QColor(_ANSI_COLORS[code - 40])
         elif 100 <= code <= 107:
             style.background = QColor(_ANSI_COLORS[code - 100 + 8])
         elif code == 49:
-            style.background = QColor(_TERMINAL_BACKGROUND)
+            style.background = QColor(style.default_background)
         elif code in (38, 48) and index + 1 < len(codes):
             color, consumed = _extended_color(codes, index + 1)
             if color is not None:

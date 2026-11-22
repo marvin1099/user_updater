@@ -7,7 +7,7 @@ from pathlib import Path
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QEventLoop, Qt, QTimer
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QDesktopServices, QPalette
 from PySide6.QtWidgets import QApplication, QCheckBox, QGroupBox, QLabel, QWidget
 
 from user_updater.gui import admin as admin_gui
@@ -15,6 +15,7 @@ from user_updater.gui.admin import AdminSettingsDialog
 from user_updater.gui.full_window import FullDetailsWindow
 from user_updater.gui.window import UpdaterWindow
 from user_updater.history import RunHistoryStore, history_path_for_state
+from user_updater.logging_config import daily_log_path
 from user_updater.policy import load_policy, policy_to_mapping, validate_policy_data
 from user_updater.requests import task_request_path
 from user_updater.state import StateStore, UpdateState
@@ -730,8 +731,12 @@ def test_minimal_window_shows_retry_actions_only_when_policy_allows_them(
 
     assert window.system_retry_button.isVisible()
     assert window.user_retry_button.isVisible()
-    retry_row = window.layout().itemAt(window.layout().count() - 1).layout().geometry()
-    assert window.heading.y() == window.height() - retry_row.y() - retry_row.height()
+    for panel, button in (
+        (window.system_panel, window.system_retry_button),
+        (window.user_panel, window.user_retry_button),
+    ):
+        assert panel is not None
+        assert panel.status_row.indexOf(button) == panel.status_row.indexOf(panel.status) + 1
     assert "2 left" in window.system_retry_button.text()
     assert "1 left" in window.user_retry_button.text()
     window.system_retry_button.click()
@@ -898,6 +903,43 @@ def test_full_details_renders_ansi_color_without_showing_escape_codes(tmp_path: 
     window.deleteLater()
 
 
+def test_compact_and_details_windows_use_the_application_palette(tmp_path: Path) -> None:
+    app = _application()
+    user_store = StateStore(tmp_path / "user.json")
+    user_store.save(
+        UpdateState(
+            phase="failed",
+            run_id="failed-user-run",
+            last_output=("Plain terminal output",),
+        )
+    )
+    compact = UpdaterWindow(
+        load_policy(),
+        user_store,
+        tmp_path / "request.json",
+        start_timer=False,
+    )
+    details = FullDetailsWindow(None, user_store)
+
+    assert compact.styleSheet() == ""
+    assert details.styleSheet() == ""
+    assert details.user_tab.terminal.styleSheet() == ""
+    assert compact.palette().color(QPalette.ColorRole.Window) == app.palette().color(
+        QPalette.ColorRole.Window
+    )
+    terminal_base = details.user_tab.terminal.palette().color(QPalette.ColorRole.Base)
+    assert terminal_base == app.palette().color(QPalette.ColorRole.Base)
+    default_text = details.user_tab.terminal.document().find("Plain terminal output")
+    assert default_text.charFormat().foreground().color() == app.palette().color(
+        QPalette.ColorRole.Text
+    )
+    assert default_text.charFormat().background().color() == app.palette().color(
+        QPalette.ColorRole.Base
+    )
+    compact.deleteLater()
+    details.deleteLater()
+
+
 def test_full_details_shows_next_run_history_and_owner_retry_control(tmp_path: Path) -> None:
     _application()
     user_store = StateStore(tmp_path / "user.json")
@@ -1005,6 +1047,72 @@ def test_system_retry_button_requests_an_admin_authorized_action(tmp_path: Path)
 
     assert requested == [True]
     assert "1 left" in window.system_tab.retry_button.text()
+    window.deleteLater()
+
+
+def test_run_history_refresh_does_not_reset_the_users_scroll_position(tmp_path: Path) -> None:
+    app = _application()
+    user_store = StateStore(tmp_path / "user.json")
+    user_store.save(UpdateState())
+    history = RunHistoryStore(history_path_for_state(user_store.path))
+    now = datetime.now().astimezone()
+    for index in range(20):
+        history.append(
+            "user-tools",
+            UpdateState(
+                phase="succeeded",
+                run_id=f"run-{index}",
+                finished_at=(now - timedelta(minutes=index)).isoformat(),
+                message=f"Update summary {index}",
+            ),
+        )
+
+    window = FullDetailsWindow(None, user_store)
+    window.history_view.setFixedHeight(90)
+    window.show()
+    app.processEvents()
+    scroll_bar = window.history_view.verticalScrollBar()
+    assert scroll_bar.maximum() > 0
+    scroll_bar.setValue(scroll_bar.maximum() // 2)
+    previous_position = scroll_bar.value()
+
+    window.refresh()
+
+    assert scroll_bar.value() == previous_position
+    window.deleteLater()
+
+
+def test_open_current_log_button_opens_the_pinned_daily_log_at_bottom_right(
+    monkeypatch, tmp_path: Path
+) -> None:
+    user_store = StateStore(tmp_path / "user.json")
+    started_at = datetime.now().astimezone() - timedelta(days=1)
+    user_store.save(
+        UpdateState(
+            phase="running",
+            run_id="running-run",
+            started_at=started_at.isoformat(),
+        )
+    )
+    log_file = tmp_path / "logs" / "updater.log"
+    selected_log = daily_log_path(log_file, started_at.date())
+    selected_log.parent.mkdir()
+    selected_log.write_text("update log\n", encoding="utf-8")
+    opened: list[str] = []
+    monkeypatch.setattr(
+        QDesktopServices,
+        "openUrl",
+        lambda url: (opened.append(url.toLocalFile()) or True),
+    )
+
+    window = FullDetailsWindow(None, user_store, log_file=log_file)
+    controls = window.layout().itemAt(window.layout().count() - 1).layout()
+    assert window.open_log_button.isEnabled()
+    assert controls.itemAt(controls.count() - 1).widget() is window.open_log_button
+
+    window.open_log_button.click()
+
+    assert opened == [str(selected_log)]
     window.deleteLater()
 
 

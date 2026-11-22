@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
@@ -54,6 +55,12 @@ class _TaskPanel(QWidget):
 
         self.status = QLabel(f"{title}: waiting")
         self.status.setWordWrap(False)
+        self.retry_button = QPushButton("Retry", self)
+        self.retry_button.setObjectName(
+            "retrySystem" if task_id == "system" else "retryUserTools"
+        )
+        self.retry_button.setToolTip(f"Retry {title.lower()}")
+        self.retry_button.hide()
         self.elapsed = QLabel("")
         self.elapsed.setObjectName("elapsed")
         self.elapsed.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -69,11 +76,13 @@ class _TaskPanel(QWidget):
         status_row.setContentsMargins(0, 0, 0, 0)
         status_row.setSpacing(5)
         status_row.addWidget(self.status, stretch=1)
+        status_row.addWidget(self.retry_button)
         status_row.addWidget(self.elapsed)
         status_row.addWidget(self.run_label)
         status_row.addWidget(self.defer_choice)
         status_row.addWidget(self.defer_button)
         status_row.addWidget(self.countdown)
+        self.status_row = status_row
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 2, 8, 2)
         layout.setSpacing(0)
@@ -239,19 +248,16 @@ class UpdaterWindow(QWidget):
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.Tool
         )
+        self.setAutoFillBackground(True)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setFixedWidth(540)
-        self.setStyleSheet(
-            "QWidget { background: #20242b; color: #f2f4f8; }"
-            "QLabel#heading { font-size: 16px; font-weight: 700; }"
-            "QLabel#message { color: #d2d8e0; }"
-            "QPushButton { padding: 6px 10px; border-radius: 4px; }"
-            "QPushButton#primary { background: #2778c4; color: white; }"
-            "QComboBox { padding: 5px; }"
-        )
 
         self.heading = QLabel("System updater" if self.system_state_store else "User updater")
         self.heading.setObjectName("heading")
+        heading_font = QFont(self.heading.font())
+        heading_font.setPointSize(max(heading_font.pointSize() + 2, 12))
+        heading_font.setBold(True)
+        self.heading.setFont(heading_font)
         self.message = QLabel("Waiting for update status…")
         self.message.setObjectName("message")
         self.message.setWordWrap(True)
@@ -281,12 +287,15 @@ class UpdaterWindow(QWidget):
         self.admin_button.clicked.connect(self.admin_requested.emit)
         self.close_button = QPushButton("Close")
         self.close_button.hide()
-        self.system_retry_button = QPushButton("Retry system update")
-        self.system_retry_button.setObjectName("retrySystem")
-        self.system_retry_button.hide()
-        self.user_retry_button = QPushButton("Retry user updates")
-        self.user_retry_button.setObjectName("retryUserTools")
-        self.user_retry_button.hide()
+        self.system_retry_button = (
+            self.system_panel.retry_button
+            if self.system_panel is not None
+            else QPushButton("Retry system update", self)
+        )
+        if self.system_panel is None:
+            self.system_retry_button.setObjectName("retrySystem")
+            self.system_retry_button.hide()
+        self.user_retry_button = self.user_panel.retry_button
         self.system_retry_button.clicked.connect(self.system_retry_requested.emit)
         self.user_retry_button.clicked.connect(self._submit_user_retry)
         buttons = QHBoxLayout()
@@ -294,11 +303,6 @@ class UpdaterWindow(QWidget):
         buttons.addWidget(self.admin_button)
         buttons.addStretch(1)
         buttons.addWidget(self.close_button)
-        retry_buttons = QHBoxLayout()
-        retry_buttons.addStretch(1)
-        retry_buttons.addWidget(self.system_retry_button)
-        retry_buttons.addWidget(self.user_retry_button)
-
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 8, 16, 8)
         layout.setSpacing(3)
@@ -309,13 +313,11 @@ class UpdaterWindow(QWidget):
             layout.addWidget(self.system_panel)
         layout.addWidget(self.user_panel)
         layout.addLayout(buttons)
-        layout.addLayout(retry_buttons)
 
         self.close_button.clicked.connect(self.close)
         # Backwards-compatible control access for user-only clients and tests.
         self.defer_choice = self.user_panel.defer_choice
         self.defer_button = self.user_panel.defer_button
-        self.retry_buttons = retry_buttons
 
     @property
     def phase(self) -> str:
