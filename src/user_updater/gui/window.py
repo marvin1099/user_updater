@@ -224,6 +224,7 @@ class UpdaterWindow(QWidget):
         self.system_state_store = system_state_store
         self._phase = "idle"
         self._full_mode = False
+        self._startup_refresh = True
         self._dismissed_runs: set[tuple[str, str | None]] = set()
         self._status_error_dismissed = False
         self._system_retry_requested_for: str | None = None
@@ -348,6 +349,8 @@ class UpdaterWindow(QWidget):
 
     def refresh(self) -> None:
         was_visible = self.isVisible()
+        startup_refresh = self._startup_refresh
+        self._startup_refresh = False
         try:
             user_state = self.state_store.load()
             system_state = self.system_state_store.load() if self.system_state_store else None
@@ -406,6 +409,14 @@ class UpdaterWindow(QWidget):
         states = {"user-tools": user_state}
         if system_state is not None:
             states["system"] = system_state
+        if startup_refresh:
+            # Persisted successes are old news after a desktop restart; keep
+            # them from reopening the compact window until a new run occurs.
+            self._dismissed_runs.update(
+                (task, state.run_id)
+                for task, state in states.items()
+                if state.phase == "succeeded"
+            )
         live_run_keys = {
             (task, state.run_id)
             for task, state in states.items()

@@ -27,6 +27,38 @@ def _application() -> QApplication:
     return application or QApplication([])
 
 
+def test_startup_hides_persisted_success_until_status_is_requested(tmp_path: Path) -> None:
+    app = _application()
+    system_store = StateStore(tmp_path / "system.json")
+    user_store = StateStore(tmp_path / "user.json")
+    next_run = (datetime.now().astimezone() + timedelta(days=2)).isoformat()
+    system_store.save(
+        UpdateState(phase="succeeded", run_id="old-system-run", next_scheduled_at=next_run)
+    )
+    user_store.save(
+        UpdateState(phase="succeeded", run_id="old-user-run", next_scheduled_at=next_run)
+    )
+
+    window = UpdaterWindow(
+        load_policy(),
+        user_store,
+        tmp_path / "user-request.json",
+        start_timer=False,
+        system_state_store=system_store,
+    )
+    app.processEvents()
+
+    assert window.phase == "succeeded"
+    assert window.isHidden()
+
+    window.refresh()
+    assert window.isHidden()
+
+    window.show_status()
+    assert window.isVisible()
+    window.deleteLater()
+
+
 def test_pending_window_offers_only_admin_allowed_reschedule_and_update_now(
     tmp_path: Path,
 ) -> None:
