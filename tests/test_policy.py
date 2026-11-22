@@ -5,6 +5,7 @@ import pytest
 from user_updater.policy import (
     PolicyError,
     check_deferral,
+    consume_test_outcome,
     load_policy,
     policy_to_mapping,
     write_policy,
@@ -69,9 +70,7 @@ retry:
         ("user_manual_attempts", -1),
     ],
 )
-def test_retry_policy_rejects_out_of_range_limits(
-    tmp_path: Path, key: str, value: int
-) -> None:
+def test_retry_policy_rejects_out_of_range_limits(tmp_path: Path, key: str, value: int) -> None:
     config = tmp_path / "project.yaml"
     config.write_text(
         f"""
@@ -164,3 +163,17 @@ def test_admin_policy_write_validates_and_round_trips_atomically(tmp_path: Path)
     assert saved.schedule.user_tools_interval_hours == 12
     assert load_policy(path) == saved
     assert path.stat().st_mode & 0o777 == 0o644
+
+
+def test_forced_test_outcomes_are_consumed_once_with_failures_first(tmp_path: Path) -> None:
+    path = tmp_path / "etc" / "project.yaml"
+    mapping = policy_to_mapping(load_policy(PROJECT_ROOT / "project.yaml"))
+    mapping["testing"]["system"] = {"fail_next": 1, "succeed_next": 1}
+    write_policy(path, mapping)
+
+    assert consume_test_outcome(path, "system") == "failure"
+    assert consume_test_outcome(path, "system") == "success"
+    assert consume_test_outcome(path, "system") is None
+    remaining = load_policy(path).testing.system
+    assert remaining.fail_next == 0
+    assert remaining.succeed_next == 0

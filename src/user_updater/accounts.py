@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import grp
 import os
 import pwd
 import re
@@ -16,7 +17,7 @@ from .policy import Policy
 
 _ACCOUNT_NAME = re.compile(r"^uupd-[a-f0-9]{10}$")
 _PACKAGE_MANAGERS = (
-    # Garuda's Topgrade integration invokes this wrapper instead of pacman.
+    # The privileged Garuda phase runs before Topgrade's native Paru adapter.
     "/usr/bin/garuda-update",
     "/usr/bin/pacman",
     "/usr/bin/apt-get",
@@ -36,6 +37,7 @@ class BuilderAccount:
     gid: int
     home: Path
     sudoers_path: Path
+    supplementary_group_ids: tuple[int, ...] = ()
 
 
 class AccountBackend(Protocol):
@@ -48,6 +50,8 @@ class AccountBackend(Protocol):
     def create_user(self, name: str, home: Path) -> None: ...
 
     def user_ids(self, name: str) -> tuple[int, int]: ...
+
+    def supplementary_group_ids(self, name: str) -> tuple[int, ...]: ...
 
     def managed_accounts(self, home_root: Path, sudoers_root: Path) -> list[BuilderAccount]: ...
 
@@ -73,20 +77,24 @@ class LinuxAccountBackend:
 
     def create_user(self, name: str, home: Path) -> None:
         home.mkdir(mode=0o700, parents=True, exist_ok=False)
+        docker_group = self._docker_group()
+        command = [
+            "useradd",
+            "--system",
+            "--user-group",
+            "--no-create-home",
+            "--home-dir",
+            str(home),
+            "--shell",
+            "/usr/sbin/nologin",
+            "--comment",
+            "Temporary user-updater builder",
+        ]
+        if docker_group is not None:
+            command.extend(("--groups", docker_group.gr_name))
+        command.append(name)
         subprocess.run(
-            [
-                "useradd",
-                "--system",
-                "--user-group",
-                "--no-create-home",
-                "--home-dir",
-                str(home),
-                "--shell",
-                "/usr/sbin/nologin",
-                "--comment",
-                "Temporary user-updater builder",
-                name,
-            ],
+            command,
             check=True,
             stdin=subprocess.DEVNULL,
             capture_output=True,
@@ -127,6 +135,24 @@ class LinuxAccountBackend:
     def user_ids(self, name: str) -> tuple[int, int]:
         account = pwd.getpwnam(name)
         return account.pw_uid, account.pw_gid
+
+    def supplementary_group_ids(self, name: str) -> tuple[int, ...]:
+        docker_group = self._docker_group()
+        if docker_group is None:
+            return ()
+        account = pwd.getpwnam(name)
+        if docker_group.gr_gid not in os.getgrouplist(name, account.pw_gid):
+            return ()
+        return (docker_group.gr_gid,)
+
+    @staticmethod
+    def _docker_group() -> grp.struct_group | None:
+        if shutil.which("docker", path="/usr/local/bin:/usr/bin:/bin") is None:
+            return None
+        try:
+            return grp.getgrnam("docker")
+        except KeyError:
+            return None
 
     def managed_accounts(self, home_root: Path, sudoers_root: Path) -> list[BuilderAccount]:
         managed: list[BuilderAccount] = []
@@ -212,6 +238,10 @@ class BuilderAccountManager:
         self.policy = policy
         self.backend = backend or LinuxAccountBackend()
 
+    @property
+    def package_manager(self) -> str | None:
+        return self.backend.package_manager
+
     def create(self) -> BuilderAccount:
         self.home_root.mkdir(mode=0o755, parents=True, exist_ok=True)
         self.sudoers_root.mkdir(mode=0o755, parents=True, exist_ok=True)
@@ -225,12 +255,14 @@ class BuilderAccountManager:
             created = True
             self.backend.write_sudoers(sudoers_path, self._sudoers_content(name))
             uid, gid = self.backend.user_ids(name)
+            supplementary_group_ids = self.backend.supplementary_group_ids(name)
             return BuilderAccount(
                 name=name,
                 uid=uid,
                 gid=gid,
                 home=home,
                 sudoers_path=sudoers_path,
+                supplementary_group_ids=supplementary_group_ids,
             )
         except BaseException:
             try:
@@ -333,14 +365,15 @@ class BuilderAccountManager:
         if manager is None:
             raise RuntimeError("no supported system package manager was detected")
         if manager == "/usr/bin/garuda-update":
-            # Paru builds as the temporary user, then uses pacman to install
-            # dependencies and built packages. Do not grant unrelated pacman
-            # operations such as package removal or database maintenance.
+            # Garuda runs as the privileged updater. Topgrade's native Paru
+            # adapter calls pacman with long option names when using sudo.
             command_specs = [
-                manager,
-                f"{manager} *",
                 "/usr/bin/pacman -S *",
+                "/usr/bin/pacman --sync *",
+                "/usr/bin/pacman -Syu --noconfirm",
+                "/usr/bin/pacman -Scc --noconfirm",
                 "/usr/bin/pacman -U *",
+                "/usr/bin/pacman --upgrade *",
             ]
         else:
             command_specs = [manager, f"{manager} *"]
@@ -348,13 +381,4 @@ class BuilderAccountManager:
         if flatpak is not None:
             command_specs.extend((flatpak, f"{flatpak} *"))
         allowed_commands = ", ".join(command_specs)
-        environment_policy = ""
-        if manager == "/usr/bin/garuda-update":
-            # Allow only the exact flags Topgrade/Garuda need through its nested
-            # sudo call; SETENV would permit arbitrary environment overrides.
-            environment_policy = (
-                'Defaults!/usr/bin/garuda-update env_check += "SKIP_MIRRORLIST=1"\n'
-                'Defaults!/usr/bin/garuda-update env_check += "UPDATE_AUR=1"\n'
-                'Defaults!/usr/bin/garuda-update env_check += "PACMAN_NOCONFIRM=1"\n'
-            )
-        return environment_policy + f"{name} ALL=(root) NOPASSWD: {allowed_commands}\n"
+        return f"{name} ALL=(root) NOPASSWD: {allowed_commands}\n"

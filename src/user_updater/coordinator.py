@@ -134,7 +134,12 @@ class UpdateCoordinator:
         self.state_store.save(pending)
         return TickAction.WAITING_FOR_RESPONSE
 
-    def run_now(self, now: datetime) -> TickAction:
+    def run_now(
+        self,
+        now: datetime,
+        *,
+        message: str = "An administrator started machine-wide updates.",
+    ) -> TickAction:
         """Create a fresh run that bypasses its normal schedule and response window."""
         state = self.state_store.load()
         if state.phase == "running":
@@ -148,7 +153,7 @@ class UpdateCoordinator:
                 scheduled_for=now.isoformat(),
                 next_scheduled_at=state.next_scheduled_at,
                 started_at=now.isoformat(),
-                message="An administrator started machine-wide updates.",
+                message=message,
             )
         )
         return TickAction.RUN
@@ -170,9 +175,7 @@ class UpdateCoordinator:
         success = returncode == 0
         retry_after = None
         if not success and state.automatic_retries_used < self.retry_policy.automatic_attempts:
-            retry_after = (
-                now + timedelta(minutes=self.retry_policy.delay_minutes)
-            ).isoformat()
+            retry_after = (now + timedelta(minutes=self.retry_policy.delay_minutes)).isoformat()
         self.state_store.save(
             UpdateState(
                 phase="succeeded" if success else "failed",
@@ -211,9 +214,7 @@ class UpdateCoordinator:
                 run_id=uuid4().hex,
                 retry_group_id=state.retry_group_id or state.run_id,
                 automatic_retries_used=(
-                    state.automatic_retries_used + 1
-                    if automatic
-                    else state.automatic_retries_used
+                    state.automatic_retries_used + 1 if automatic else state.automatic_retries_used
                 ),
                 manual_retries_used=(
                     state.manual_retries_used if automatic else state.manual_retries_used + 1

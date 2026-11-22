@@ -20,9 +20,7 @@ from ..requests import UserRequest, save_request
 from ..state import StateError, StateStore, UpdateState
 from .placement import WindowPlacement
 
-_DISMISSIBLE_PHASES = frozenset(
-    {"awaiting_response", "running", "deferred", "succeeded", "failed"}
-)
+_DISMISSIBLE_PHASES = frozenset({"awaiting_response", "running", "deferred", "succeeded", "failed"})
 _TERMINAL_PHASES = frozenset({"succeeded", "failed"})
 
 
@@ -47,6 +45,10 @@ class _TaskPanel(QWidget):
 
         self.status = QLabel(f"{title}: waiting")
         self.status.setWordWrap(False)
+        self.elapsed = QLabel("")
+        self.elapsed.setObjectName("elapsed")
+        self.elapsed.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.elapsed.hide()
         self.countdown = QLabel("")
         self.defer_choice = QComboBox()
         self.defer_button = QPushButton("Reschedule")
@@ -56,9 +58,16 @@ class _TaskPanel(QWidget):
         controls.addWidget(self.defer_choice, stretch=1)
         controls.addWidget(self.defer_button)
         controls.addWidget(self.update_now_button)
+        status_row = QHBoxLayout()
+        status_row.setContentsMargins(0, 0, 0, 0)
+        status_row.setSpacing(8)
+        status_row.addWidget(self.elapsed)
+        status_row.addWidget(self.status, stretch=1)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 4, 8, 4)
-        layout.addWidget(self.status)
+        layout.setContentsMargins(8, 2, 8, 2)
+        layout.setSpacing(2)
+        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        layout.addLayout(status_row)
         layout.addWidget(self.countdown)
         layout.addLayout(controls)
 
@@ -76,6 +85,10 @@ class _TaskPanel(QWidget):
 
         self.status.setText(f"{self.title}: {state.phase.replace('_', ' ').title()}")
         self.status.setToolTip(state.message)
+        running = state.phase == "running"
+        self.elapsed.setVisible(running)
+        if running:
+            self.elapsed.setText(_elapsed_text(state.started_at))
         show_panel = state.phase != "idle" or bool(state.last_output)
         self.setVisible(show_panel)
         response_open = state.phase == "awaiting_response"
@@ -135,6 +148,7 @@ class UpdaterWindow(QWidget):
     phase_changed = Signal(str)
     full_mode_requested = Signal()
     admin_requested = Signal()
+    system_retry_requested = Signal()
 
     def __init__(
         self,
@@ -155,6 +169,8 @@ class UpdaterWindow(QWidget):
         self._full_mode = False
         self._dismissed_runs: set[tuple[str, str | None]] = set()
         self._status_error_dismissed = False
+        self._system_retry_requested_for: str | None = None
+        self._user_retry_requested_for: str | None = None
         self.setWindowTitle("User Updater Status")
         self._build_ui(request_file, system_request_file, admin_enabled)
         self._placement = WindowPlacement(self, title=self.windowTitle())
@@ -177,7 +193,6 @@ class UpdaterWindow(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setFixedWidth(540)
-        self.setMinimumHeight(180)
         self.setStyleSheet(
             "QWidget { background: #20242b; color: #f2f4f8; }"
             "QLabel#heading { font-size: 16px; font-weight: 700; }"
@@ -211,27 +226,42 @@ class UpdaterWindow(QWidget):
         self.admin_button.clicked.connect(self.admin_requested.emit)
         self.close_button = QPushButton("Close")
         self.close_button.hide()
+        self.system_retry_button = QPushButton("Retry system update")
+        self.system_retry_button.setObjectName("retrySystem")
+        self.system_retry_button.hide()
+        self.user_retry_button = QPushButton("Retry user updates")
+        self.user_retry_button.setObjectName("retryUserTools")
+        self.user_retry_button.hide()
+        self.system_retry_button.clicked.connect(self.system_retry_requested.emit)
+        self.user_retry_button.clicked.connect(self._submit_user_retry)
         buttons = QHBoxLayout()
         buttons.addWidget(self.full_button)
         buttons.addWidget(self.admin_button)
         buttons.addStretch(1)
         buttons.addWidget(self.close_button)
+        retry_buttons = QHBoxLayout()
+        retry_buttons.addStretch(1)
+        retry_buttons.addWidget(self.system_retry_button)
+        retry_buttons.addWidget(self.user_retry_button)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 12, 16, 12)
-        layout.setSpacing(6)
+        layout.setContentsMargins(16, 8, 16, 8)
+        layout.setSpacing(3)
+        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         layout.addWidget(self.heading)
         layout.addWidget(self.message)
         if self.system_panel is not None:
             layout.addWidget(self.system_panel)
         layout.addWidget(self.user_panel)
         layout.addLayout(buttons)
+        layout.addLayout(retry_buttons)
 
         self.close_button.clicked.connect(self.close)
         # Backwards-compatible button access for user-only clients and tests.
         self.defer_choice = self.user_panel.defer_choice
         self.defer_button = self.user_panel.defer_button
         self.update_now_button = self.user_panel.update_now_button
+        self.retry_buttons = retry_buttons
 
     @property
     def phase(self) -> str:
@@ -274,6 +304,7 @@ class UpdaterWindow(QWidget):
                 self.phase_changed.emit(self._phase)
             if not self._full_mode and not self._status_error_dismissed:
                 self.show()
+                self._fit_height_to_contents()
                 if previous_phase != self._phase:
                     QTimer.singleShot(0, self._position_window)
             return
@@ -293,6 +324,27 @@ class UpdaterWindow(QWidget):
         self.user_panel.apply_state(user_state)
         if self.system_panel is not None and system_state is not None:
             self.system_panel.apply_state(system_state)
+        if system_state is not None and (
+            system_state.run_id != self._system_retry_requested_for
+            or system_state.phase != "failed"
+        ):
+            self._system_retry_requested_for = None
+        if user_state.run_id != self._user_retry_requested_for:
+            self._user_retry_requested_for = None
+        self._update_retry_button(
+            self.system_retry_button,
+            system_state,
+            self.policy.retry.system.user_manual_attempts,
+            self._system_retry_requested_for,
+            "Retry system update",
+        )
+        self._update_retry_button(
+            self.user_retry_button,
+            user_state,
+            self.policy.retry.user_tools.user_manual_attempts,
+            self._user_retry_requested_for,
+            "Retry user updates",
+        )
 
         states = {"user-tools": user_state}
         if system_state is not None:
@@ -343,12 +395,6 @@ class UpdaterWindow(QWidget):
             else:
                 self.message.setText("Waiting for the next scheduled update.")
 
-        response_count = sum(state.phase == "awaiting_response" for state in states.values())
-        visible_count = sum(
-            state.phase != "idle" or bool(state.last_output) for state in states.values()
-        )
-        self.setFixedHeight(max(180, min(350, 150 + 38 * visible_count + 45 * response_count)))
-
         self.close_button.setVisible(self._phase in {"deferred", "succeeded", "failed"})
         if self._phase == "idle":
             self.hide()
@@ -365,6 +411,7 @@ class UpdaterWindow(QWidget):
                 self.hide()
             else:
                 self.show()
+                self._fit_height_to_contents()
                 if previous_phase != self._phase:
                     QTimer.singleShot(0, self._position_window)
 
@@ -385,6 +432,43 @@ class UpdaterWindow(QWidget):
 
     def _position_window(self) -> None:
         self._placement.position_bottom_right()
+
+    @staticmethod
+    def _update_retry_button(
+        button: QPushButton,
+        state: UpdateState | None,
+        retry_limit: int,
+        pending_run_id: str | None,
+        label: str,
+    ) -> None:
+        remaining = max(0, retry_limit - state.manual_retries_used) if state else 0
+        visible = state is not None and state.phase == "failed" and remaining > 0
+        button.setVisible(visible)
+        if visible:
+            pending = state.run_id is not None and state.run_id == pending_run_id
+            button.setText("Retry requested" if pending else f"{label} ({remaining} left)")
+            button.setEnabled(not pending)
+
+    def _submit_user_retry(self) -> None:
+        try:
+            state = self.state_store.load()
+            if (
+                state.phase != "failed"
+                or state.run_id is None
+                or state.manual_retries_used >= self.policy.retry.user_tools.user_manual_attempts
+            ):
+                return
+            save_request(self.user_panel.request_file, UserRequest(state.run_id, "retry"))
+            self._user_retry_requested_for = state.run_id
+            self.refresh()
+        except (OSError, StateError, ValueError) as exc:
+            self.user_panel.status.setText(f"Your user tools: could not request retry: {exc}")
+
+    def _fit_height_to_contents(self) -> None:
+        layout = self.layout()
+        layout.activate()
+        self.setMinimumHeight(0)
+        self.resize(self.width(), layout.minimumSize().height())
 
     def _hide_if_phase(
         self,
@@ -459,3 +543,18 @@ def _remaining_seconds(deadline: str | None) -> int | None:
     if end.tzinfo is None:
         return None
     return max(0, int((end - datetime.now().astimezone()).total_seconds()))
+
+
+def _elapsed_text(started_at: str | None) -> str:
+    if started_at is None:
+        return "—:—:—"
+    try:
+        started = datetime.fromisoformat(started_at)
+    except ValueError:
+        return "—:—:—"
+    if started.tzinfo is None:
+        return "—:—:—"
+    elapsed = max(0, int((datetime.now(started.tzinfo) - started).total_seconds()))
+    hours, remainder = divmod(elapsed, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"

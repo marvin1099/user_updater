@@ -2,7 +2,7 @@
 
 User Updater is a Python and Qt application for scheduled Linux updates. A machine-wide installation schedules system updates separately from each logged-in user's personal tools. The jobs have independent schedules and run concurrently when both are due; users can respond to their personal-tool prompt, while system updates follow administrator settings. A user-only installation updates only the current user's tools.
 
-Before a personal-tool update, the desktop client gives the user a response window. The user may start it immediately or request one of the administrator-allowed reschedules; no response means it proceeds automatically. System updates are informational to users and run on the administrator's schedule without user reschedule/start controls. The compact frameless window can expand to read-only system/user output tabs and a recent-run history tab, with elapsed and next-run times. Failed tasks can be retried from the details view within the configured limit; system retries require administrator authorization. Closing either view never cancels a worker.
+Before a personal-tool update, the desktop client gives the user a response window. The user may start it immediately or request one of the administrator-allowed reschedules; no response means it proceeds automatically. System updates are informational to users and run on the administrator's schedule without user reschedule/start controls. The compact frameless window shows elapsed timers beside running tasks and retry buttons when retries are allowed. Full details is one page with collapsible system, user-tool, and history sections; running tasks expand automatically, otherwise history opens. Closing either view never cancels a worker.
 
 ## Requirements
 
@@ -69,6 +69,7 @@ Default behavior:
 - Personal-tool reschedule choices: 1, 4, or 24 hours; at most two reschedules per scheduled run.
 - Automatic retries: up to 2 additional attempts per scheduled run, 15 minutes apart, independently for system updates and personal tools.
 - User-requested retries: disabled by default for both task types. Administrators can allow 0–5 per scheduled run; system retry requests always go through polkit.
+- Admin settings include a collapsed **Testing** section with one-shot forced-failure and forced-success counts for each task. Simulated runs skip all package and user-tool commands; failures are consumed before successes. Each active user's personal-tool attempt consumes one count.
 - System updates run under a short-lived, non-login builder account. Topgrade runs its full step set as that builder, using a private config with `[misc] assume_yes = true` and `[flatpak] use_sudo = true`; the user's Topgrade config is not reused. Topgrade handles the detected system package manager—including Garuda's update integration—and the other available steps. The builder's passwordless sudo permissions remain governed by `security.builder_sudo_mode` and are restricted to the detected package manager and Flatpak by default. Per-user tools continue to run separately under each desktop user's account.
 - Active local graphical users can have their configured per-user tools updated separately, without administrator privileges. Their state is stored independently by UID.
 - The administrator's `updates.user_tools` list is the hard allow-list for personal tools. Users may opt out of individual allowed tools; all allowed tools start selected until a user saves preferences. Administrators can disable personal-tool updates entirely with `updates.run_user_tools: false`.
@@ -78,7 +79,7 @@ Retry policy is configured independently under `retry.system` and `retry.user_to
 
 Unknown policy keys and invalid values are rejected. User-mode execution always disables system updates even if a local policy attempts to enable them.
 
-The minimal desktop view shows machine-wide system updates without controls. In **Full details**, users can request a system retry only when the administrator allows it, and that request requires polkit authorization. The details view opens System updates, User tools, and Run history tabs, with read-only output, elapsed time, and the next scheduled run. System output shows a read-only, bounded preview (up to 200 recent lines); the full system log is readable by all users but writable only by root. Users can toggle their allowed personal tools in the User tools tab and may retry failed personal-tool runs only within the administrator's configured limit.
+The minimal desktop view shows machine-wide system updates without reschedule/start controls. A permitted system retry requires polkit authorization. Full details has collapsible System updates, User tools, and Run history sections, with read-only output, elapsed time, and the next scheduled run. System output shows a read-only, bounded preview (up to 200 recent lines); the full system log is readable by all users but writable only by root. Users can toggle their allowed personal tools in the User tools section and may retry failed personal-tool runs only within the administrator's configured limit.
 
 ### Wayland window placement
 

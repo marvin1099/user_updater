@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 from user_updater.accounts import BuilderAccount, BuilderAccountManager, LinuxAccountBackend
 from user_updater.policy import load_policy
@@ -13,6 +14,7 @@ class FakeAccountBackend:
         self.removed: list[str] = []
         self.sudoers: dict[Path, str] = {}
         self.managed: list[BuilderAccount] = []
+        self.builder_group_ids: tuple[int, ...] = ()
 
     def create_user(self, name: str, home: Path) -> None:
         self.created.append((name, home))
@@ -20,6 +22,9 @@ class FakeAccountBackend:
 
     def user_ids(self, _name: str) -> tuple[int, int]:
         return 4242, 4242
+
+    def supplementary_group_ids(self, _name: str) -> tuple[int, ...]:
+        return self.builder_group_ids
 
     def managed_accounts(self, _home_root: Path, _sudoers_root: Path) -> list[BuilderAccount]:
         return list(self.managed)
@@ -62,6 +67,57 @@ def test_temporary_builder_gets_limited_passwordless_package_manager_access(
     assert account.sudoers_path not in backend.sudoers
 
 
+def test_temporary_builder_gets_only_the_configured_supplementary_groups(
+    tmp_path: Path,
+) -> None:
+    backend = FakeAccountBackend()
+    backend.builder_group_ids = (937,)
+    manager = BuilderAccountManager(
+        home_root=tmp_path / "builders",
+        sudoers_root=tmp_path / "sudoers",
+        policy=load_policy(),
+        backend=backend,
+    )
+
+    account = manager.create()
+
+    assert account.supplementary_group_ids == (937,)
+    manager.remove(account)
+    assert backend.removed == [account.name]
+
+
+def test_linux_builder_user_is_created_with_docker_group_membership(
+    tmp_path: Path, monkeypatch
+) -> None:
+    calls: list[list[str]] = []
+    account_info = SimpleNamespace(pw_uid=4242, pw_gid=4242)
+    monkeypatch.setattr(
+        "user_updater.accounts.shutil.which",
+        lambda name, path=None: "/usr/bin/docker" if name == "docker" else None,
+    )
+    monkeypatch.setattr(
+        "user_updater.accounts.grp.getgrnam",
+        lambda name: SimpleNamespace(gr_name=name, gr_gid=937),
+    )
+    monkeypatch.setattr("user_updater.accounts.pwd.getpwnam", lambda _name: account_info)
+    monkeypatch.setattr("user_updater.accounts.os.chown", lambda *_args: None)
+    monkeypatch.setattr(
+        "user_updater.accounts.os.getgrouplist",
+        lambda _name, _gid: [4242, 937],
+    )
+    monkeypatch.setattr(
+        "user_updater.accounts.subprocess.run",
+        lambda command, **_kwargs: calls.append(command),
+    )
+
+    backend = LinuxAccountBackend()
+    backend.create_user("uupd-0123456789", tmp_path / "builder")
+
+    assert calls[0][0] == "useradd"
+    assert calls[0][calls[0].index("--groups") + 1] == "docker"
+    assert backend.supplementary_group_ids("uupd-0123456789") == (937,)
+
+
 def test_unrestricted_builder_sudo_requires_explicit_admin_policy(tmp_path: Path) -> None:
     config = tmp_path / "project.yaml"
     config.write_text(
@@ -87,7 +143,9 @@ def test_garuda_update_wrapper_is_preferred_over_pacman(monkeypatch) -> None:
     assert LinuxAccountBackend().package_manager == "/usr/bin/garuda-update"
 
 
-def test_temporary_builder_sudoers_allows_garuda_update_wrapper(tmp_path: Path) -> None:
+def test_temporary_builder_sudoers_allows_limited_paru_pacman_commands(
+    tmp_path: Path,
+) -> None:
     backend = FakeAccountBackend()
     backend.package_manager = "/usr/bin/garuda-update"
     backend.flatpak = "/usr/bin/flatpak"
@@ -102,13 +160,14 @@ def test_temporary_builder_sudoers_allows_garuda_update_wrapper(tmp_path: Path) 
 
     sudoers = backend.sudoers[account.sudoers_path]
     assert sudoers.splitlines() == [
-        'Defaults!/usr/bin/garuda-update env_check += "SKIP_MIRRORLIST=1"',
-        'Defaults!/usr/bin/garuda-update env_check += "UPDATE_AUR=1"',
-        'Defaults!/usr/bin/garuda-update env_check += "PACMAN_NOCONFIRM=1"',
-        f"{account.name} ALL=(root) NOPASSWD: /usr/bin/garuda-update, "
-        "/usr/bin/garuda-update *, /usr/bin/pacman -S *, /usr/bin/pacman -U *, "
+        f"{account.name} ALL=(root) NOPASSWD: /usr/bin/pacman -S *, "
+        "/usr/bin/pacman --sync *, "
+        "/usr/bin/pacman -Syu --noconfirm, /usr/bin/pacman -Scc --noconfirm, "
+        "/usr/bin/pacman -U *, /usr/bin/pacman --upgrade *, "
         "/usr/bin/flatpak, /usr/bin/flatpak *",
     ]
+    assert "/usr/bin/garuda-update" not in sudoers
+    assert "UPDATE_AUR" not in sudoers
     assert "SETENV" not in sudoers
 
 
@@ -127,9 +186,7 @@ def test_non_garuda_package_manager_does_not_get_environment_overrides(
     sudoers = backend.sudoers[account.sudoers_path]
 
     assert "Defaults!" not in sudoers
-    assert "SKIP_MIRRORLIST" not in sudoers
     assert "UPDATE_AUR" not in sudoers
-    assert "PACMAN_NOCONFIRM" not in sudoers
     assert "SETENV" not in sudoers
 
 

@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import copy
+import fcntl
 import os
+import stat
 import tempfile
-from dataclasses import dataclass
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -46,6 +50,10 @@ _DEFAULTS: dict[str, Any] = {
             "delay_minutes": 15,
             "user_manual_attempts": 0,
         },
+    },
+    "testing": {
+        "system": {"fail_next": 0, "succeed_next": 0},
+        "user_tools": {"fail_next": 0, "succeed_next": 0},
     },
     "security": {"builder_sudo_mode": "package-manager"},
 }
@@ -94,6 +102,18 @@ class RetryPolicy:
 
 
 @dataclass(frozen=True)
+class TaskTestingPolicy:
+    fail_next: int
+    succeed_next: int
+
+
+@dataclass(frozen=True)
+class TestingPolicy:
+    system: TaskTestingPolicy
+    user_tools: TaskTestingPolicy
+
+
+@dataclass(frozen=True)
 class SecurityPolicy:
     builder_sudo_mode: str
 
@@ -105,6 +125,7 @@ class Policy:
     interaction: InteractionPolicy
     updates: UpdatePolicy
     retry: RetryPolicy
+    testing: TestingPolicy
     security: SecurityPolicy
 
 
@@ -165,6 +186,13 @@ def policy_to_mapping(policy: Policy) -> dict[str, Any]:
             }
             for task in ("system", "user_tools")
         },
+        "testing": {
+            task: {
+                "fail_next": getattr(policy.testing, task).fail_next,
+                "succeed_next": getattr(policy.testing, task).succeed_next,
+            }
+            for task in ("system", "user_tools")
+        },
         "security": {"builder_sudo_mode": policy.security.builder_sudo_mode},
     }
 
@@ -176,6 +204,41 @@ def write_policy(path: Path, raw: Any, file_mode: int = 0o644) -> Policy:
     path.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
     if path.parent.is_symlink():
         raise PolicyError("policy directory must not be a symbolic link")
+    if path.is_symlink():
+        raise PolicyError("policy file must not be a symbolic link")
+    with _policy_lock(path):
+        _write_policy_unlocked(path, policy, file_mode)
+    return policy
+
+
+def consume_test_outcome(path: Path, task: str) -> str | None:
+    """Atomically consume one forced test result, prioritizing failures over successes."""
+    if task not in {"system", "user_tools"}:
+        raise ValueError(f"unknown update task for testing outcome: {task}")
+    path = Path(path)
+    if not path.is_file():
+        return None
+    if path.is_symlink() or path.parent.is_symlink():
+        raise PolicyError("policy path must not contain a symbolic link")
+    with _policy_lock(path):
+        policy = load_policy(path)
+        task_policy = getattr(policy.testing, task)
+        if task_policy.fail_next:
+            outcome = "failure"
+            updated_task_policy = replace(task_policy, fail_next=task_policy.fail_next - 1)
+        elif task_policy.succeed_next:
+            outcome = "success"
+            updated_task_policy = replace(task_policy, succeed_next=task_policy.succeed_next - 1)
+        else:
+            return None
+        updated_testing = replace(policy.testing, **{task: updated_task_policy})
+        updated_policy = replace(policy, testing=updated_testing)
+        file_mode = stat.S_IMODE(path.stat().st_mode)
+        _write_policy_unlocked(path, updated_policy, file_mode)
+    return outcome
+
+
+def _write_policy_unlocked(path: Path, policy: Policy, file_mode: int) -> None:
     rendered = yaml.safe_dump(policy_to_mapping(policy), sort_keys=False)
     temporary_path: Path | None = None
     try:
@@ -198,7 +261,28 @@ def write_policy(path: Path, raw: Any, file_mode: int = 0o644) -> Policy:
         if temporary_path is not None:
             temporary_path.unlink(missing_ok=True)
         raise PolicyError(f"cannot write policy {path}: {exc}") from exc
-    return policy
+
+
+@contextmanager
+def _policy_lock(path: Path) -> Iterator[None]:
+    lock_path = path.with_name(f".{path.name}.lock")
+    flags = os.O_CREAT | os.O_RDWR | os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(lock_path, flags, 0o600)
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or metadata.st_nlink != 1
+        ):
+            raise PolicyError("policy lock must be a singly linked regular file owned by updater")
+        os.fchmod(descriptor, 0o600)
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(descriptor)
 
 
 def check_deferral(policy: Policy, hours: int, deferrals_used: int) -> bool:
@@ -334,6 +418,12 @@ def _make_policy(raw: dict[str, Any]) -> Policy:
         user_tools=_make_task_retry_policy(retry_raw["user_tools"], "retry.user_tools"),
     )
 
+    testing_raw = raw["testing"]
+    testing = TestingPolicy(
+        system=_make_task_testing_policy(testing_raw["system"], "testing.system"),
+        user_tools=_make_task_testing_policy(testing_raw["user_tools"], "testing.user_tools"),
+    )
+
     security_raw = raw["security"]
     sudo_mode = security_raw["builder_sudo_mode"]
     if sudo_mode not in _SUDO_MODES:
@@ -346,6 +436,7 @@ def _make_policy(raw: dict[str, Any]) -> Policy:
         interaction=interaction,
         updates=updates,
         retry=retry,
+        testing=testing,
         security=security,
     )
 
@@ -361,6 +452,13 @@ def _make_task_retry_policy(raw: dict[str, Any], name: str) -> TaskRetryPolicy:
         user_manual_attempts=_integer(
             raw["user_manual_attempts"], f"{name}.user_manual_attempts", minimum=0, maximum=5
         ),
+    )
+
+
+def _make_task_testing_policy(raw: dict[str, Any], name: str) -> TaskTestingPolicy:
+    return TaskTestingPolicy(
+        fail_next=_integer(raw["fail_next"], f"{name}.fail_next", minimum=0, maximum=100),
+        succeed_next=_integer(raw["succeed_next"], f"{name}.succeed_next", minimum=0, maximum=100),
     )
 
 

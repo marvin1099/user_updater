@@ -118,8 +118,14 @@ class UpdateService:
                 self.on_log(self.state_store.load().message)
                 self._record_history()
             return action
-        action = self.coordinator.run_now(now)
-        self.on_log("An administrator started machine-wide updates immediately.")
+        task_description = (
+            "machine-wide system updates" if self.task_id == "system" else "personal-tool updates"
+        )
+        action = self.coordinator.run_now(
+            now,
+            message=f"An administrator started {task_description}.",
+        )
+        self.on_log(f"An administrator started {task_description} immediately.")
         return self._run_workflow(action)
 
     def _tick_locked(self, now: datetime | None) -> TickAction:

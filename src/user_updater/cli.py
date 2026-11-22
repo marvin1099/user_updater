@@ -20,7 +20,7 @@ from .history import HistoryError, RunHistoryStore, RunRecord, history_path_for_
 from .installer import InstallPaths, SystemInstaller, UserInstaller, UserInstallPaths
 from .logging_config import configure_logging
 from .paths import system_paths, user_paths
-from .policy import PolicyError, load_policy, write_policy
+from .policy import PolicyError, consume_test_outcome, load_policy, write_policy
 from .requests import UserRequest, save_request, task_request_path
 from .service import RequestHome, UpdateService, local_request_homes
 from .sessions import DesktopUser, detect_graphical_users
@@ -215,6 +215,7 @@ def _tick(system_mode: bool) -> int:
             system_policy,
             builder_manager=builder,
             session_detector=lambda: [],
+            test_outcome=lambda: consume_test_outcome(paths.policy, "system"),
         )
         jobs.append(
             (
@@ -253,6 +254,7 @@ def _tick(system_mode: bool) -> int:
                 user_policy,
                 builder_manager=None,
                 session_detector=sessions_for_user,
+                test_outcome=lambda: consume_test_outcome(paths.policy, "user_tools"),
             )
             jobs.append(
                 (
@@ -348,6 +350,7 @@ def _retry(system_mode: bool) -> int:
         system_policy,
         builder_manager=builder,
         session_detector=lambda: [],
+        test_outcome=lambda: consume_test_outcome(paths.policy, "system"),
     )
     service = UpdateService(
         system_policy,
@@ -392,6 +395,7 @@ def _run_system_now(system_mode: bool) -> int:
         system_policy,
         builder_manager=builder,
         session_detector=lambda: [],
+        test_outcome=lambda: consume_test_outcome(paths.policy, "system"),
     )
     service = UpdateService(
         system_policy,
@@ -411,6 +415,67 @@ def _run_system_now(system_mode: bool) -> int:
     final_state = state_store.load()
     print(final_state.message)
     return int(final_state.phase == "failed")
+
+
+def _run_user_tools_now(system_mode: bool) -> int:
+    """Start personal-tool updates for every active local desktop user."""
+    if not system_mode:
+        raise ValueError("immediate user-tool updates require --system")
+    _require_root("immediate personal-tool updates")
+    executable = _executable_path()
+    _require_trusted_system_install(executable)
+    paths = system_paths()
+    policy = load_policy(paths.policy if paths.policy.exists() else None)
+    if not policy.updates.run_user_tools:
+        raise ValueError("personal-tool updates are disabled by administrator policy")
+
+    logger = configure_logging(paths.log_file)
+    desktop_users = detect_graphical_users()
+    if not desktop_users:
+        logger.info("No active local desktop session; skipping immediate personal-tool updates.")
+        return 0
+
+    def run_user(user: DesktopUser) -> tuple[DesktopUser, TickAction, str]:
+        user_policy = _user_policy_for(user, policy, logger)
+        state_store = StateStore(paths.user_state_dir / f"{user.uid}.json", file_mode=0o644)
+        workflow = UpdateWorkflow(
+            user_policy,
+            builder_manager=None,
+            session_detector=lambda selected=user: [selected],
+            test_outcome=lambda: consume_test_outcome(paths.policy, "user_tools"),
+        )
+        service = UpdateService(
+            user_policy,
+            state_store,
+            workflow,
+            request_homes=lambda selected=user: [RequestHome(selected.home, selected.uid)],
+            on_log=logger.info,
+            task_id="user-tools",
+            interval_hours=policy.schedule.user_tools_interval_hours,
+            response_minutes=policy.schedule.user_tools_response_minutes,
+            lock_file=paths.state.parent / "locks" / f"user-tools-{user.uid}.lock",
+        )
+        action = service.run_now()
+        state = state_store.load()
+        logger.info(
+            "task=user-tools:%s scheduler=%s phase=%s message=%s",
+            user.username,
+            action.value,
+            state.phase,
+            state.message,
+        )
+        return user, action, state.phase
+
+    failed = False
+    with ThreadPoolExecutor(max_workers=min(16, len(desktop_users))) as pool:
+        futures = {pool.submit(run_user, user): user for user in desktop_users}
+        for future in as_completed(futures):
+            user, action, phase = future.result()
+            if action is TickAction.WORKER_ALREADY_ACTIVE:
+                logger.info("Personal-tool updates are already running for %s.", user.username)
+                continue
+            failed = failed or action is TickAction.RECOVERED_INTERRUPTED_RUN or phase == "failed"
+    return int(failed)
 
 
 def _retry_user() -> int:

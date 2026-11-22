@@ -31,5 +31,13 @@ retry:
     delay_minutes: 15
     user_manual_attempts: 0
 
+testing:
+  system:
+    fail_next: 0
+    succeed_next: 0
+  user_tools:
+    fail_next: 0
+    succeed_next: 0
+
 security:
   builder_sudo_mode: package-manager

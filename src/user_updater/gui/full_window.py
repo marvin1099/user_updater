@@ -1,4 +1,4 @@
-"""Expanded read-only update console with separate system and user tabs."""
+"""Expanded read-only update console with collapsible task and history sections."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QPlainTextEdit,
     QPushButton,
-    QTabWidget,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -25,6 +25,7 @@ from ..history import HistoryError, RunHistoryStore, RunRecord, history_path_for
 from ..requests import UserRequest, save_request
 from ..state import StateError, StateStore, UpdateState
 from ..tool_preferences import ToolPreferenceError, UserToolPreferenceStore
+from .collapsible import CollapsibleSection
 from .placement import WindowPlacement
 
 _ACTIVE_PHASES = {"awaiting_response", "running", "deferred"}
@@ -57,14 +58,16 @@ class _TaskTab(QWidget):
         self.status = QLabel(f"{title}: waiting")
         self.elapsed = QLabel("Elapsed: —")
         self.next_run = QLabel("Next scheduled: —")
+        self.retry_info = QLabel("")
+        self.retry_info.setObjectName("automaticRetryInfo")
+        self.retry_info.setWordWrap(True)
+        self.retry_info.hide()
         self.tools_group = QGroupBox("Personal tools enabled for your account")
         self.tool_checks_widget = QWidget(self.tools_group)
         self.tool_check_layout = QHBoxLayout(self.tool_checks_widget)
         self.tool_check_layout.setContentsMargins(0, 0, 0, 0)
         self.tool_checkboxes: dict[str, QCheckBox] = {}
-        self.custom_tools_checkbox = QCheckBox(
-            "Run my scripts from ~/.config/user_updater/tools.d"
-        )
+        self.custom_tools_checkbox = QCheckBox("Run my scripts from ~/.config/user_updater/tools.d")
         self.custom_tools_checkbox.setObjectName("customToolScripts")
         self.tool_preferences_status = QLabel("")
         self.save_tools_button = QPushButton("Save tool choices")
@@ -91,6 +94,7 @@ class _TaskTab(QWidget):
         heading.addWidget(self.elapsed)
         layout.addLayout(heading)
         layout.addWidget(self.next_run)
+        layout.addWidget(self.retry_info)
         layout.addWidget(self.tools_group)
         layout.addWidget(self.terminal, stretch=1)
         controls = QHBoxLayout()
@@ -106,12 +110,30 @@ class _TaskTab(QWidget):
         retry_enabled: bool = False,
         retry_remaining: int = 0,
         retry_pending: bool = False,
+        automatic_retry_limit: int = 0,
     ) -> None:
         self.status.setText(f"{title}: {state.phase.replace('_', ' ').title()} — {state.message}")
         if retry_pending:
             self.status.setText(f"{title}: retry requested — waiting for the updater.")
         self.elapsed.setText(f"Elapsed: {_elapsed_text(state)}")
         self.next_run.setText(f"Next scheduled: {_format_datetime(state.next_scheduled_at)}")
+        retry_info = ""
+        if state.phase == "failed" and automatic_retry_limit > 0:
+            if (
+                state.retry_after is not None
+                and state.automatic_retries_used < automatic_retry_limit
+            ):
+                retry_info = (
+                    f"Automatic retry {state.automatic_retries_used + 1} of "
+                    f"{automatic_retry_limit} scheduled for {_format_datetime(state.retry_after)}."
+                )
+            elif state.automatic_retries_used >= automatic_retry_limit:
+                retry_info = (
+                    f"Automatic retries exhausted "
+                    f"({state.automatic_retries_used} of {automatic_retry_limit} used)."
+                )
+        self.retry_info.setText(retry_info)
+        self.retry_info.setVisible(bool(retry_info))
         can_retry = retry_enabled and state.phase == "failed"
         self.retry_button.setVisible(can_retry)
         if can_retry:
@@ -141,6 +163,8 @@ class FullDetailsWindow(QWidget):
         system_output_visible: bool = True,
         system_manual_retry_limit: int = 0,
         user_manual_retry_limit: int = 0,
+        system_automatic_retry_limit: int = 0,
+        user_automatic_retry_limit: int = 0,
         admin_allowed_user_tools: tuple[str, ...] = (),
         admin_allows_custom_tools: bool = True,
         user_tool_preferences: UserToolPreferenceStore | None = None,
@@ -156,6 +180,8 @@ class FullDetailsWindow(QWidget):
         self.system_output_visible = system_output_visible
         self.system_manual_retry_limit = system_manual_retry_limit
         self.user_manual_retry_limit = user_manual_retry_limit
+        self.system_automatic_retry_limit = system_automatic_retry_limit
+        self.user_automatic_retry_limit = user_automatic_retry_limit
         self.user_request_file = Path(user_request_file) if user_request_file else None
         self.user_tool_preferences = user_tool_preferences
         self.admin_allowed_user_tools = tuple(admin_allowed_user_tools)
@@ -172,6 +198,7 @@ class FullDetailsWindow(QWidget):
         self._user_retry_requested_for: str | None = None
         self._seen_active = False
         self._completion_emitted = False
+        self._expanded_active_sections: frozenset[str] | None = None
         self.setWindowTitle("User Updater Details")
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -189,16 +216,27 @@ class FullDetailsWindow(QWidget):
 
         title = QLabel("Update details")
         title.setStyleSheet("font-size: 16px; font-weight: 700;")
-        self.tabs = QTabWidget()
         self.system_tab = _TaskTab("System updates")
         self.user_tab = _TaskTab("User tools")
-        self.tabs.addTab(self.system_tab, "System updates")
-        self.tabs.addTab(self.user_tab, "User tools")
         self.history_view = QPlainTextEdit()
         self.history_view.setObjectName("runHistory")
         self.history_view.setReadOnly(True)
         self.history_view.setPlaceholderText("No completed update runs recorded.")
-        self.tabs.addTab(self.history_view, "Run history")
+        self.system_section = CollapsibleSection("System updates", self.system_tab)
+        self.user_section = CollapsibleSection("User tools", self.user_tab)
+        self.history_section = CollapsibleSection("Run history", self.history_view)
+        sections_widget = QWidget()
+        sections_layout = QVBoxLayout(sections_widget)
+        sections_layout.setContentsMargins(0, 0, 0, 0)
+        sections_layout.setSpacing(6)
+        sections_layout.addWidget(self.system_section)
+        sections_layout.addWidget(self.user_section)
+        sections_layout.addWidget(self.history_section)
+        sections_layout.addStretch(1)
+        scroll = QScrollArea()
+        scroll.setObjectName("detailsScrollArea")
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(sections_widget)
         self.system_tab.retry_button.clicked.connect(self.system_retry_requested.emit)
         self.user_tab.retry_button.clicked.connect(self._submit_user_retry)
         self.user_tab.save_tools_button.clicked.connect(self._save_user_tool_preferences)
@@ -209,7 +247,7 @@ class FullDetailsWindow(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 12, 14, 12)
         layout.addWidget(title)
-        layout.addWidget(self.tabs, stretch=1)
+        layout.addWidget(scroll, stretch=1)
         controls = QHBoxLayout()
         controls.addStretch(1)
         controls.addWidget(self.back_button)
@@ -229,12 +267,9 @@ class FullDetailsWindow(QWidget):
         user_state = self._read_state(self.user_state_store, self.user_tools_enabled)
         if user_state.run_id != self._user_retry_requested_for:
             self._user_retry_requested_for = None
-        if (
-            self._system_retry_requested_for is not None
-            and (
-                system_state.run_id != self._system_retry_requested_for
-                or system_state.phase != "failed"
-            )
+        if self._system_retry_requested_for is not None and (
+            system_state.run_id != self._system_retry_requested_for
+            or system_state.phase != "failed"
         ):
             self._system_retry_requested_for = None
         self.system_tab.update_state(
@@ -251,6 +286,7 @@ class FullDetailsWindow(QWidget):
                 system_state.run_id is not None
                 and system_state.run_id == self._system_retry_requested_for
             ),
+            automatic_retry_limit=self.system_automatic_retry_limit,
         )
         self.user_tab.update_state(
             "Your user tools",
@@ -260,23 +296,41 @@ class FullDetailsWindow(QWidget):
                 and self.user_request_file is not None
                 and user_state.manual_retries_used < self.user_manual_retry_limit
             ),
-            retry_remaining=max(
-                0, self.user_manual_retry_limit - user_state.manual_retries_used
-            ),
+            retry_remaining=max(0, self.user_manual_retry_limit - user_state.manual_retries_used),
             retry_pending=(
                 user_state.run_id is not None
                 and user_state.run_id == self._user_retry_requested_for
             ),
+            automatic_retry_limit=self.user_automatic_retry_limit,
         )
         self._refresh_history()
         states = [system_state, user_state]
         active = any(state.phase in _ACTIVE_PHASES for state in states)
+        self._sync_sections(system_state, user_state)
         if active and self._completion_emitted:
             self._completion_emitted = False
         self._seen_active = self._seen_active or active
         if self.isVisible() and self._seen_active and not active and not self._completion_emitted:
             self._completion_emitted = True
             QTimer.singleShot(0, self.all_updates_done.emit)
+
+    def reset_section_expansion(self) -> None:
+        """Apply the requested default expansion whenever details are opened."""
+        self._expanded_active_sections = None
+        self.refresh()
+
+    def _sync_sections(self, system_state: UpdateState, user_state: UpdateState) -> None:
+        expanded = frozenset(
+            name
+            for name, state in (("system", system_state), ("user", user_state))
+            if state.phase == "running"
+        )
+        if expanded == self._expanded_active_sections:
+            return
+        self._expanded_active_sections = expanded
+        self.system_section.set_expanded("system" in expanded)
+        self.user_section.set_expanded("user" in expanded)
+        self.history_section.set_expanded(not expanded)
 
     def position_bottom_right(self) -> None:
         """Place the details window at the bottom right when the compositor allows it."""
@@ -363,8 +417,10 @@ class FullDetailsWindow(QWidget):
             self.user_tab.tool_checkboxes[tool] = check
             self.user_tab.tool_check_layout.addWidget(check)
         visible = (
-            bool(tools) or self.admin_allows_custom_tools
-        ) and self.user_tools_enabled and self.user_tool_preferences is not None
+            (bool(tools) or self.admin_allows_custom_tools)
+            and self.user_tools_enabled
+            and self.user_tool_preferences is not None
+        )
         self.user_tab.tools_group.setVisible(visible)
 
     def _save_user_tool_preferences(self) -> None:

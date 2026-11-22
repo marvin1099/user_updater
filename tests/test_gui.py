@@ -1,4 +1,5 @@
 import os
+from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -210,6 +211,9 @@ def test_admin_settings_dialog_builds_a_valid_policy_mapping(tmp_path: Path) -> 
     dialog.system_user_retries.setValue(2)
     dialog.user_tools_automatic_retries.setValue(1)
     dialog.user_tools_user_retries.setValue(3)
+    dialog.system_forced_failures.setValue(2)
+    dialog.user_forced_successes.setValue(4)
+    assert not dialog.testing_section.is_expanded()
 
     mapping = dialog.policy_mapping()
 
@@ -224,6 +228,10 @@ def test_admin_settings_dialog_builds_a_valid_policy_mapping(tmp_path: Path) -> 
     }
     assert mapping["retry"]["user_tools"]["automatic_attempts"] == 1
     assert mapping["retry"]["user_tools"]["user_manual_attempts"] == 3
+    assert mapping["testing"] == {
+        "system": {"fail_next": 2, "succeed_next": 0},
+        "user_tools": {"fail_next": 0, "succeed_next": 4},
+    }
     dialog.deleteLater()
 
 
@@ -253,10 +261,37 @@ def test_admin_run_now_button_starts_the_authorized_system_command(monkeypatch) 
 
     dialog.run_system_now_button.click()
 
-    assert commands == [
-        ("/usr/bin/pkexec", ["/usr/local/bin/user-updater-admin", "run-now"])
-    ]
+    assert commands == [("/usr/bin/pkexec", ["/usr/local/bin/user-updater-admin", "run-now"])]
     assert information_calls == []
+    dialog.deleteLater()
+
+
+def test_admin_run_now_button_starts_authorized_user_updates(monkeypatch) -> None:
+    _application()
+    dialog = AdminSettingsDialog(load_policy())
+    commands: list[tuple[str, list[str]]] = []
+    monkeypatch.setattr(
+        admin_gui, "_trusted_admin_helper", lambda: "/usr/local/bin/user-updater-admin"
+    )
+    monkeypatch.setattr(
+        admin_gui.shutil,
+        "which",
+        lambda name: "/usr/bin/pkexec" if name == "pkexec" else None,
+    )
+    monkeypatch.setattr(
+        admin_gui.QProcess,
+        "startDetached",
+        lambda executable, arguments: (commands.append((executable, arguments)) or True, 1234),
+    )
+
+    assert dialog.run_user_tools_now_button.isEnabled()
+    dialog.run_user_tools_now_button.click()
+
+    assert commands == [
+        ("/usr/bin/pkexec", ["/usr/local/bin/user-updater-admin", "run-user-tools-now"])
+    ]
+    dialog.run_user_tools.setChecked(False)
+    assert not dialog.run_user_tools_now_button.isEnabled()
     dialog.deleteLater()
 
 
@@ -390,7 +425,111 @@ def test_system_minimal_view_compacts_failures_and_hides_idle_task(tmp_path: Pat
     window.deleteLater()
 
 
-def test_full_details_has_read_only_task_tabs_and_returns_after_completion(tmp_path: Path) -> None:
+def test_minimal_terminal_status_rows_are_packed_tightly(tmp_path: Path) -> None:
+    app = _application()
+    system_store = StateStore(tmp_path / "system.json")
+    user_store = StateStore(tmp_path / "user.json")
+    system_store.save(UpdateState(phase="failed", run_id="failed-system-run"))
+    user_store.save(UpdateState(phase="succeeded", run_id="succeeded-user-run"))
+
+    window = UpdaterWindow(
+        load_policy(),
+        user_store,
+        tmp_path / "user-request.json",
+        start_timer=False,
+        system_state_store=system_store,
+    )
+    window.show()
+    app.processEvents()
+
+    assert window.system_panel is not None
+    row_tops = [
+        window.heading.y(),
+        window.message.y(),
+        window.system_panel.y() + window.system_panel.status.y(),
+        window.user_panel.y() + window.user_panel.status.y(),
+    ]
+    assert window.height() < 190
+    assert all(next_top - top <= 34 for top, next_top in zip(row_tops, row_tops[1:], strict=False))
+    button_row = window.layout().itemAt(window.layout().count() - 1).layout().geometry()
+    bottom_padding = window.height() - button_row.y() - button_row.height()
+    assert window.heading.y() == bottom_padding
+    window.deleteLater()
+
+
+def test_minimal_window_shows_elapsed_timers_left_of_running_tasks(tmp_path: Path) -> None:
+    app = _application()
+    system_store = StateStore(tmp_path / "system.json")
+    user_store = StateStore(tmp_path / "user.json")
+    started = (datetime.now().astimezone() - timedelta(seconds=90)).isoformat()
+    system_store.save(UpdateState(phase="running", run_id="system-run", started_at=started))
+    user_store.save(UpdateState(phase="running", run_id="user-run", started_at=started))
+
+    window = UpdaterWindow(
+        load_policy(),
+        user_store,
+        tmp_path / "user-request.json",
+        start_timer=False,
+        system_state_store=system_store,
+    )
+    app.processEvents()
+
+    for panel in (window.system_panel, window.user_panel):
+        assert panel is not None
+        assert not panel.elapsed.isHidden()
+        hours, minutes, seconds = (int(value) for value in panel.elapsed.text().split(":"))
+        assert hours * 3600 + minutes * 60 + seconds >= 89
+        assert panel.elapsed.x() < panel.status.x()
+    window.deleteLater()
+
+
+def test_minimal_window_shows_retry_actions_only_when_policy_allows_them(
+    tmp_path: Path,
+) -> None:
+    app = _application()
+    system_store = StateStore(tmp_path / "system.json")
+    user_store = StateStore(tmp_path / "user.json")
+    system_store.save(UpdateState(phase="failed", run_id="failed-system"))
+    user_store.save(UpdateState(phase="failed", run_id="failed-user"))
+    base_policy = load_policy()
+    policy = replace(
+        base_policy,
+        retry=replace(
+            base_policy.retry,
+            system=replace(base_policy.retry.system, user_manual_attempts=2),
+            user_tools=replace(base_policy.retry.user_tools, user_manual_attempts=1),
+        ),
+    )
+    request_file = tmp_path / "requests" / "user-tools.json"
+    window = UpdaterWindow(
+        policy,
+        user_store,
+        request_file,
+        start_timer=False,
+        system_state_store=system_store,
+    )
+    system_requests: list[None] = []
+    window.system_retry_requested.connect(lambda: system_requests.append(None))
+    app.processEvents()
+
+    assert window.system_retry_button.isVisible()
+    assert window.user_retry_button.isVisible()
+    retry_row = window.layout().itemAt(window.layout().count() - 1).layout().geometry()
+    assert window.heading.y() == window.height() - retry_row.y() - retry_row.height()
+    assert "2 left" in window.system_retry_button.text()
+    assert "1 left" in window.user_retry_button.text()
+    window.system_retry_button.click()
+    window.user_retry_button.click()
+
+    assert system_requests == [None]
+    assert '"run_id":"failed-user"' in request_file.read_text(encoding="utf-8")
+    assert not window.user_retry_button.isEnabled()
+    window.deleteLater()
+
+
+def test_full_details_has_collapsible_task_sections_and_returns_after_completion(
+    tmp_path: Path,
+) -> None:
     app = _application()
     system_store = StateStore(tmp_path / "system.json")
     user_store = StateStore(tmp_path / "user.json")
@@ -414,7 +553,9 @@ def test_full_details_has_read_only_task_tabs_and_returns_after_completion(tmp_p
     window.show()
     app.processEvents()
 
-    assert window.tabs.count() == 3
+    assert window.system_section.is_expanded()
+    assert window.user_section.is_expanded()
+    assert not window.history_section.is_expanded()
     assert window.system_tab.terminal.isReadOnly()
     assert window.user_tab.terminal.isReadOnly()
     system_output = window.system_tab.terminal.toPlainText().splitlines()
@@ -428,6 +569,13 @@ def test_full_details_has_read_only_task_tabs_and_returns_after_completion(tmp_p
     window.refresh()
     app.processEvents()
     assert window._completion_emitted
+    assert not window.system_section.is_expanded()
+    assert not window.user_section.is_expanded()
+    assert window.history_section.is_expanded()
+    window.system_section.set_expanded(True)
+    window.reset_section_expansion()
+    assert not window.system_section.is_expanded()
+    assert window.history_section.is_expanded()
     window.deleteLater()
 
 
@@ -466,9 +614,7 @@ def test_full_details_shows_next_run_history_and_owner_retry_control(tmp_path: P
             message="User update failed.",
         )
     )
-    RunHistoryStore(history_path_for_state(user_store.path)).append(
-        "user-tools", user_store.load()
-    )
+    RunHistoryStore(history_path_for_state(user_store.path)).append("user-tools", user_store.load())
     request_path = tmp_path / "requests" / "user-tools.json"
     window = FullDetailsWindow(
         None,
@@ -488,6 +634,53 @@ def test_full_details_shows_next_run_history_and_owner_retry_control(tmp_path: P
     assert '"run_id":"failed-user-run"' in request_path.read_text(encoding="utf-8")
     assert '"action":"retry"' in request_path.read_text(encoding="utf-8")
     assert not window.user_tab.retry_button.isEnabled()
+    window.deleteLater()
+
+
+def test_full_details_shows_when_automatic_retry_is_scheduled(tmp_path: Path) -> None:
+    _application()
+    system_store = StateStore(tmp_path / "system.json")
+    user_store = StateStore(tmp_path / "user.json")
+    retry_at = (datetime.now().astimezone() + timedelta(minutes=15)).isoformat()
+    user_store.save(
+        UpdateState(
+            phase="failed",
+            run_id="failed-user-run",
+            automatic_retries_used=1,
+            retry_after=retry_at,
+            returncode=1,
+            message="User update failed.",
+        )
+    )
+    window = FullDetailsWindow(
+        system_store,
+        user_store,
+        user_automatic_retry_limit=2,
+    )
+
+    assert not window.user_tab.retry_info.isHidden()
+    assert "Automatic retry 2 of 2 scheduled for" in window.user_tab.retry_info.text()
+
+    window.deleteLater()
+
+
+def test_full_details_defaults_to_history_when_no_update_is_running(tmp_path: Path) -> None:
+    _application()
+    system_store = StateStore(tmp_path / "system.json")
+    user_store = StateStore(tmp_path / "user.json")
+    user_store.save(
+        UpdateState(
+            phase="awaiting_response",
+            run_id="scheduled-user-run",
+            response_deadline=(datetime.now().astimezone() + timedelta(minutes=5)).isoformat(),
+        )
+    )
+    window = FullDetailsWindow(system_store, user_store)
+
+    assert not window.system_section.is_expanded()
+    assert not window.user_section.is_expanded()
+    assert window.history_section.is_expanded()
+
     window.deleteLater()
 
 

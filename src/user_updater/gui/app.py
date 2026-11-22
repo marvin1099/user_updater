@@ -52,6 +52,8 @@ def run_gui(system_mode: bool = False) -> int:
         system_output_visible=True,
         system_manual_retry_limit=policy.retry.system.user_manual_attempts,
         user_manual_retry_limit=policy.retry.user_tools.user_manual_attempts,
+        system_automatic_retry_limit=policy.retry.system.automatic_attempts,
+        user_automatic_retry_limit=policy.retry.user_tools.automatic_attempts,
         admin_allowed_user_tools=policy.updates.user_tools,
         admin_allows_custom_tools=policy.updates.allow_custom_user_tools,
         user_tool_preferences=user_tool_preferences,
@@ -59,7 +61,7 @@ def run_gui(system_mode: bool = False) -> int:
 
     def show_full_details() -> None:
         window.set_full_mode(True)
-        full_window.refresh()
+        full_window.reset_section_expansion()
         full_window.show()
         full_window.position_bottom_right()
         full_window.raise_()
@@ -75,12 +77,10 @@ def run_gui(system_mode: bool = False) -> int:
     def policy_saved(updated_policy) -> None:
         window.apply_policy(updated_policy)
         full_window.system_enabled = system_mode and updated_policy.updates.run_system
-        full_window.system_manual_retry_limit = (
-            updated_policy.retry.system.user_manual_attempts
-        )
-        full_window.user_manual_retry_limit = (
-            updated_policy.retry.user_tools.user_manual_attempts
-        )
+        full_window.system_manual_retry_limit = updated_policy.retry.system.user_manual_attempts
+        full_window.user_manual_retry_limit = updated_policy.retry.user_tools.user_manual_attempts
+        full_window.system_automatic_retry_limit = updated_policy.retry.system.automatic_attempts
+        full_window.user_automatic_retry_limit = updated_policy.retry.user_tools.automatic_attempts
         full_window.apply_user_tool_policy(
             updated_policy.updates.run_user_tools,
             updated_policy.updates.user_tools,
@@ -90,6 +90,7 @@ def run_gui(system_mode: bool = False) -> int:
 
     window.full_mode_requested.connect(show_full_details)
     window.admin_requested.connect(lambda: open_admin_settings(window, paths.policy, policy_saved))
+    window.system_retry_requested.connect(lambda: start_system_retry(window))
     full_window.system_retry_requested.connect(lambda: start_system_retry(full_window))
     full_window.back_requested.connect(return_to_minimal)
     full_window.all_updates_done.connect(finish_full_details)

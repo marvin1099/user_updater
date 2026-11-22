@@ -1,6 +1,9 @@
+import os
 import sys
 import threading
 import time
+
+import pytest
 
 from user_updater.runner import run_command
 
@@ -117,6 +120,28 @@ def test_runner_gives_children_a_terminal_without_connecting_terminal_input() ->
 
     assert result.returncode == 0
     assert output == ["True:False:xterm-256color"]
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="supplementary groups require root")
+def test_runner_sets_requested_supplementary_groups() -> None:
+    output: list[str] = []
+    group_id = os.getgid()
+
+    result = run_command(
+        [
+            sys.executable,
+            "-c",
+            "import os; print(','.join(map(str, os.getgroups())))",
+        ],
+        on_output=output.append,
+        user_id=os.getuid(),
+        group_id=group_id,
+        extra_group_ids=(group_id,),
+        poll_interval=0.02,
+    )
+
+    assert result.returncode == 0
+    assert output == [str(group_id)]
 
 
 def test_quiet_process_warns_but_is_not_killed() -> None:

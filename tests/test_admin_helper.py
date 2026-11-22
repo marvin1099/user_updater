@@ -7,10 +7,12 @@ def test_admin_helper_exposes_only_authorize_write_and_run_actions(monkeypatch) 
     monkeypatch.setattr(admin_helper, "_require_trusted_root_install", lambda: None)
     monkeypatch.setattr(cli, "_write_admin_policy", lambda: 12)
     monkeypatch.setattr(cli, "_run_system_now", lambda *, system_mode: 23)
+    monkeypatch.setattr(cli, "_run_user_tools_now", lambda *, system_mode: 34)
 
     assert admin_helper.main(["authorize-settings"]) == 0
     assert admin_helper.main(["write-policy"]) == 12
     assert admin_helper.main(["run-now"]) == 23
+    assert admin_helper.main(["run-user-tools-now"]) == 34
 
     with pytest.raises(SystemExit):
         admin_helper.main(["tick"])

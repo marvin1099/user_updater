@@ -18,9 +18,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-_ANSI_ESCAPE = re.compile(
-    r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\)|[@-_])"
-)
+_ANSI_ESCAPE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\)|[@-_])")
 _ANSI_SGR = re.compile(r"\x1b\[[0-?]*[ -/]*m")
 _MAX_UNTERMINATED_LINE = 64 * 1024
 
@@ -63,6 +61,7 @@ def run_command(
     cwd: Path | None = None,
     user_id: int | None = None,
     group_id: int | None = None,
+    extra_group_ids: Sequence[int] = (),
     cancel_event: threading.Event | None = None,
     quiet_warning_seconds: float | None = 90,
     poll_interval: float = 0.25,
@@ -89,7 +88,7 @@ def run_command(
     if user_id is not None:
         privilege_options["user"] = user_id
         privilege_options["group"] = group_id
-        privilege_options["extra_groups"] = ()
+        privilege_options["extra_groups"] = tuple(extra_group_ids)
     master_fd, slave_fd = pty.openpty()
     try:
         terminal_attributes = termios.tcgetattr(slave_fd)

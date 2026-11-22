@@ -1,4 +1,4 @@
-"""Narrow polkit entry point for administrator settings and manual system updates."""
+"""Narrow polkit entry point for administrator settings and immediate updates."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="user-updater-admin")
     parser.add_argument(
         "action",
-        choices=("authorize-settings", "write-policy", "run-now"),
+        choices=("authorize-settings", "write-policy", "run-now", "run-user-tools-now"),
     )
     args = parser.parse_args(argv)
 
@@ -28,7 +28,9 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.action == "write-policy":
             return cli._write_admin_policy()
-        return cli._run_system_now(system_mode=True)
+        if args.action == "run-now":
+            return cli._run_system_now(system_mode=True)
+        return cli._run_user_tools_now(system_mode=True)
     except subprocess.CalledProcessError as exc:
         detail = exc.stderr.strip() if isinstance(exc.stderr, str) else ""
         print(

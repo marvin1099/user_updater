@@ -240,6 +240,23 @@ def test_service_keeps_distinct_completed_progress_lines(tmp_path: Path) -> None
     )
 
 
+def test_admin_user_tools_run_now_logs_the_correct_task(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "user.json")
+    logs: list[str] = []
+    service = UpdateService(
+        load_policy(),
+        store,
+        FakeWorkflow(),
+        task_id="user-tools",
+        clock=lambda: NOW,
+        on_log=logs.append,
+    )
+
+    service.run_now(NOW)
+
+    assert logs[0] == "An administrator started personal-tool updates immediately."
+
+
 def test_manual_retry_is_refused_unless_the_latest_state_failed(tmp_path: Path) -> None:
     store = StateStore(tmp_path / "state.json")
     store.save(UpdateState(phase="running", run_id="live-run"))

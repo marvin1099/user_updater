@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..policy import Policy, PolicyError, load_policy, policy_to_mapping, validate_policy_data
+from .collapsible import CollapsibleSection
 
 _DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 _TOOLS = ("flatpak", "pipx", "pip", "npm", "cargo", "gem")
@@ -101,9 +102,7 @@ class AdminSettingsDialog(QDialog):
         )
         system_retry_group = QGroupBox("System updates")
         system_retry_form = QFormLayout(system_retry_group)
-        self.system_automatic_retries = _spin(
-            policy.retry.system.automatic_attempts, 0, 5
-        )
+        self.system_automatic_retries = _spin(policy.retry.system.automatic_attempts, 0, 5)
         self.system_retry_delay = _spin(policy.retry.system.delay_minutes, 1, 1440)
         self.system_user_retries = _spin(policy.retry.system.user_manual_attempts, 0, 5)
         system_retry_form.addRow("Automatic retry attempts", self.system_automatic_retries)
@@ -113,9 +112,7 @@ class AdminSettingsDialog(QDialog):
 
         user_retry_group = QGroupBox("Personal user tools")
         user_retry_form = QFormLayout(user_retry_group)
-        self.user_tools_automatic_retries = _spin(
-            policy.retry.user_tools.automatic_attempts, 0, 5
-        )
+        self.user_tools_automatic_retries = _spin(policy.retry.user_tools.automatic_attempts, 0, 5)
         self.user_tools_retry_delay = _spin(policy.retry.user_tools.delay_minutes, 1, 1440)
         self.user_tools_user_retries = _spin(policy.retry.user_tools.user_manual_attempts, 0, 5)
         user_retry_form.addRow("Automatic retry attempts", self.user_tools_automatic_retries)
@@ -123,6 +120,26 @@ class AdminSettingsDialog(QDialog):
         user_retry_form.addRow("User-requested retries per run", self.user_tools_user_retries)
         retry_layout.addWidget(user_retry_group)
         form.addRow(retry_group)
+
+        testing_content = QWidget()
+        testing_form = QFormLayout(testing_content)
+        self.system_forced_failures = _spin(policy.testing.system.fail_next, 0, 100)
+        self.user_forced_failures = _spin(policy.testing.user_tools.fail_next, 0, 100)
+        self.system_forced_successes = _spin(policy.testing.system.succeed_next, 0, 100)
+        self.user_forced_successes = _spin(policy.testing.user_tools.succeed_next, 0, 100)
+        testing_form.addRow("Next system updates to force-fail", self.system_forced_failures)
+        testing_form.addRow("Next user-tool updates to force-fail", self.user_forced_failures)
+        testing_form.addRow("Next system updates to force-success", self.system_forced_successes)
+        testing_form.addRow("Next user-tool updates to force-success", self.user_forced_successes)
+        testing_note = QLabel(
+            "These one-shot simulations skip all update commands. Each active user's "
+            "tool-update attempt consumes one count. Forced failures are used before "
+            "forced successes for each task."
+        )
+        testing_note.setWordWrap(True)
+        testing_form.addRow(testing_note)
+        self.testing_section = CollapsibleSection("Testing", testing_content, expanded=False)
+        form.addRow(self.testing_section)
 
         interaction = QGroupBox("Rescheduling")
         interaction_form = QFormLayout(interaction)
@@ -177,9 +194,16 @@ class AdminSettingsDialog(QDialog):
         self.run_system_now_button.setEnabled(policy.updates.run_system)
         self.run_system_now_button.clicked.connect(lambda: start_system_update_now(self))
         self.run_system.toggled.connect(self.run_system_now_button.setEnabled)
-        buttons.addButton(
-            self.run_system_now_button, QDialogButtonBox.ButtonRole.ActionRole
+        buttons.addButton(self.run_system_now_button, QDialogButtonBox.ButtonRole.ActionRole)
+        self.run_user_tools_now_button = QPushButton("Run user updates now")
+        self.run_user_tools_now_button.setObjectName("runUserToolsNow")
+        self.run_user_tools_now_button.setToolTip(
+            "Run personal-tool updates for all active local desktop users."
         )
+        self.run_user_tools_now_button.setEnabled(policy.updates.run_user_tools)
+        self.run_user_tools_now_button.clicked.connect(lambda: start_user_tools_now(self))
+        self.run_user_tools.toggled.connect(self.run_user_tools_now_button.setEnabled)
+        buttons.addButton(self.run_user_tools_now_button, QDialogButtonBox.ButtonRole.ActionRole)
         buttons.accepted.connect(self._validate_and_accept)
         buttons.rejected.connect(self.reject)
         layout = QVBoxLayout(self)
@@ -235,6 +259,19 @@ class AdminSettingsDialog(QDialog):
                     automatic_attempts=self.user_tools_automatic_retries.value(),
                     delay_minutes=self.user_tools_retry_delay.value(),
                     user_manual_attempts=self.user_tools_user_retries.value(),
+                ),
+            ),
+            testing=replace(
+                self.policy.testing,
+                system=replace(
+                    self.policy.testing.system,
+                    fail_next=self.system_forced_failures.value(),
+                    succeed_next=self.system_forced_successes.value(),
+                ),
+                user_tools=replace(
+                    self.policy.testing.user_tools,
+                    fail_next=self.user_forced_failures.value(),
+                    succeed_next=self.user_forced_successes.value(),
                 ),
             ),
             security=replace(
@@ -370,6 +407,22 @@ def start_system_update_now(parent: QWidget) -> None:
     started, _pid = QProcess.startDetached(pkexec, [helper, "run-now"])
     if not started:
         QMessageBox.warning(parent, "System updates", "Could not start pkexec.")
+
+
+def start_user_tools_now(parent: QWidget) -> None:
+    """Start personal-tool updates for active users through the trusted root helper."""
+    try:
+        helper = _trusted_admin_helper()
+        pkexec = shutil.which("pkexec")
+        if pkexec is None:
+            raise RuntimeError("pkexec is required to start user updates")
+    except (OSError, RuntimeError, ValueError) as exc:
+        QMessageBox.warning(parent, "User updates", str(exc))
+        return
+
+    started, _pid = QProcess.startDetached(pkexec, [helper, "run-user-tools-now"])
+    if not started:
+        QMessageBox.warning(parent, "User updates", "Could not start pkexec.")
 
 
 def _spin(value: int, minimum: int, maximum: int) -> QSpinBox:

@@ -13,12 +13,14 @@ from user_updater.workflow import UpdateWorkflow
 class FakeBuilderManager:
     def __init__(self, home: Path) -> None:
         self.home_root = home
+        self.package_manager: str | None = None
         self.account = BuilderAccount(
             "uupd-0123456789",
             os.getuid(),
             os.getgid(),
             home / "uupd-0123456789",
             home / "sudoers" / "user-updater-uupd-0123456789",
+            supplementary_group_ids=(937,),
         )
         self.account.home.mkdir(parents=True)
         self.removed: list[BuilderAccount] = []
@@ -44,10 +46,7 @@ def test_topgrade_runs_as_the_temporary_builder_and_is_cleaned(tmp_path: Path) -
 
     def runner(command: list[str], **kwargs: object) -> CommandResult:
         assert topgrade_config.read_text(encoding="utf-8") == (
-            "[misc]\n"
-            "assume_yes = true\n\n"
-            "[flatpak]\n"
-            "use_sudo = true\n"
+            "[misc]\nassume_yes = true\n\n[flatpak]\nuse_sudo = true\n"
         )
         config_stat = topgrade_config.stat()
         assert stat.S_IMODE(config_stat.st_mode) == 0o600
@@ -76,11 +75,14 @@ def test_topgrade_runs_as_the_temporary_builder_and_is_cleaned(tmp_path: Path) -
     assert result.returncode == 0
     assert calls[0][0] == [
         "/usr/bin/topgrade",
+        "--notify-end",
+        "never",
         "--cleanup",
         "--no-retry",
     ]
     assert calls[0][1]["user_id"] == manager.account.uid
     assert calls[0][1]["group_id"] == manager.account.gid
+    assert calls[0][1]["extra_group_ids"] == (937,)
     assert calls[0][1]["env"]["HOME"] == str(manager.account.home)
     assert calls[0][1]["env"]["XDG_CONFIG_HOME"] == str(topgrade_config.parent)
     assert progress_ends == [None]
@@ -92,6 +94,7 @@ def test_garuda_uses_full_topgrade_without_a_custom_paru_command(tmp_path: Path)
     config = tmp_path / "project.yaml"
     config.write_text("version: 1\nupdates:\n  run_user_tools: false\n", encoding="utf-8")
     manager = FakeBuilderManager(tmp_path / "builders")
+    manager.package_manager = "/usr/bin/garuda-update"
     calls: list[tuple[list[str], dict[str, object]]] = []
     which_calls: list[str] = []
 
@@ -114,11 +117,48 @@ def test_garuda_uses_full_topgrade_without_a_custom_paru_command(tmp_path: Path)
     result = workflow.run(lambda _line: None)
 
     assert result.returncode == 0
-    assert [call[0] for call in calls] == [["/usr/bin/topgrade", "--cleanup", "--no-retry"]]
+    assert [call[0] for call in calls] == [
+        ["/usr/bin/garuda-update", "--noconfirm"],
+        ["/usr/bin/topgrade", "--notify-end", "never", "--no-retry"],
+    ]
+    garuda_environment = calls[0][1]["env"]
+    assert garuda_environment["SKIP_MIRRORLIST"] == "1"
+    assert "UPDATE_AUR" not in garuda_environment
+    assert "user_id" not in calls[0][1]
+    assert calls[1][1]["user_id"] == manager.account.uid
     assert which_calls == ["topgrade"]
-    assert "assume_yes = true" in (
+    assert "assume_yes = true" in (manager.account.home / ".config" / "topgrade.toml").read_text(
+        encoding="utf-8"
+    )
+    assert 'arch_package_manager = "paru"' in (
         manager.account.home / ".config" / "topgrade.toml"
     ).read_text(encoding="utf-8")
+
+
+def test_garuda_failure_prevents_topgrade_paru_step(tmp_path: Path) -> None:
+    config = tmp_path / "project.yaml"
+    config.write_text("version: 1\nupdates:\n  run_user_tools: false\n", encoding="utf-8")
+    manager = FakeBuilderManager(tmp_path / "builders")
+    manager.package_manager = "/usr/bin/garuda-update"
+    calls: list[list[str]] = []
+
+    def runner(command: list[str], **_kwargs: object) -> CommandResult:
+        calls.append(command)
+        return CommandResult(1, 1.0, False, ("Garuda failed",))
+
+    workflow = UpdateWorkflow(
+        policy=load_policy(config),
+        builder_manager=manager,
+        runner=runner,
+        which=lambda name, path=None: "/usr/bin/topgrade" if name == "topgrade" else None,
+        session_detector=lambda: [],
+    )
+
+    result = workflow.run(lambda _line: None)
+
+    assert result.returncode != 0
+    assert calls == [["/usr/bin/garuda-update", "--noconfirm"]]
+    assert manager.removed == [manager.account]
 
 
 @pytest.mark.parametrize(
@@ -139,12 +179,7 @@ def test_topgrade_config_replaces_existing_or_malformed_config(
     topgrade_config = manager.account.home / ".config" / "topgrade.toml"
     topgrade_config.parent.mkdir(parents=True)
     topgrade_config.write_text(existing_config, encoding="utf-8")
-    expected_config = (
-        "[misc]\n"
-        "assume_yes = true\n\n"
-        "[flatpak]\n"
-        "use_sudo = true\n"
-    )
+    expected_config = "[misc]\nassume_yes = true\n\n[flatpak]\nuse_sudo = true\n"
     calls: list[tuple[list[str], dict[str, object]]] = []
 
     def runner(command: list[str], **kwargs: object) -> CommandResult:
@@ -204,3 +239,31 @@ def test_failed_builder_cleanup_makes_successful_update_fail_closed(tmp_path: Pa
 
     assert result.returncode != 0
     assert any("failed to remove temporary builder" in line for line in output)
+
+
+@pytest.mark.parametrize(("outcome", "expected_returncode"), [("failure", 1), ("success", 0)])
+def test_forced_test_outcome_skips_every_real_update_command(
+    tmp_path: Path, outcome: str, expected_returncode: int
+) -> None:
+    config = tmp_path / "project.yaml"
+    config.write_text("version: 1\nupdates:\n  run_user_tools: false\n", encoding="utf-8")
+    manager = FakeBuilderManager(tmp_path / "builders")
+    calls: list[list[str]] = []
+    output: list[str] = []
+    workflow = UpdateWorkflow(
+        policy=load_policy(config),
+        builder_manager=manager,
+        runner=lambda command, **_kwargs: calls.append(command) or CommandResult(0, 0.1, False, ()),
+        which=lambda name, path=None: "/usr/bin/topgrade" if name == "topgrade" else None,
+        session_detector=lambda: [],
+        test_outcome=lambda: outcome,
+    )
+
+    result = workflow.run(output.append)
+
+    assert result.returncode == expected_returncode
+    assert calls == []
+    assert manager.removed == []
+    assert any(
+        "TEST MODE" in line and "no package or user-tool commands" in line for line in output
+    )

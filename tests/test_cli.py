@@ -117,9 +117,7 @@ updates:
 
     class PreferenceService:
         def __init__(self, policy, *_args, **_kwargs) -> None:
-            observed.append(
-                (policy.updates.user_tools, policy.updates.allow_custom_user_tools)
-            )
+            observed.append((policy.updates.user_tools, policy.updates.allow_custom_user_tools))
 
         def tick(self) -> TickAction:
             return TickAction.NOT_DUE
@@ -134,6 +132,64 @@ updates:
 
     assert result == 0
     assert observed == [(("flatpak",), False)]
+
+
+def test_admin_run_now_starts_personal_tool_updates_for_active_users(
+    monkeypatch, tmp_path: Path
+) -> None:
+    users = [
+        DesktopUser("alice", 1001, 1001, tmp_path / "alice", tmp_path / "runtime-alice"),
+        DesktopUser("bob", 1002, 1002, tmp_path / "bob", tmp_path / "runtime-bob"),
+    ]
+    for user in users:
+        user.home.mkdir()
+    paths = AppPaths(
+        policy=tmp_path / "project.yaml",
+        state=tmp_path / "system" / "state.json",
+        user_state_dir=tmp_path / "system" / "users",
+        builder_home=tmp_path / "system" / "builders",
+        sudoers=tmp_path / "sudoers",
+        request=tmp_path / "requests" / "user-tools.json",
+        log_file=tmp_path / "logs" / "updater.log",
+    )
+    observed: list[tuple[Path, Path, bool, str]] = []
+
+    class ImmediateService:
+        def __init__(self, policy, state_store, workflow, **kwargs) -> None:
+            self.policy = policy
+            self.state_store = state_store
+            self.workflow = workflow
+            self.kwargs = kwargs
+
+        def run_now(self) -> TickAction:
+            user = next(user for user in users if str(user.uid) in self.state_store.path.name)
+            observed.append(
+                (
+                    self.state_store.path,
+                    self.kwargs["lock_file"],
+                    self.workflow.policy.updates.run_system,
+                    self.kwargs["task_id"],
+                )
+            )
+            self.state_store.save(
+                UpdateState(phase="succeeded", run_id=f"run-{user.uid}", message="Done.")
+            )
+            return TickAction.RUN
+
+    monkeypatch.setattr(cli, "system_paths", lambda: paths)
+    monkeypatch.setattr(cli, "load_policy", lambda _path=None: load_policy())
+    monkeypatch.setattr(cli, "configure_logging", lambda *_args, **_kwargs: _Logger())
+    monkeypatch.setattr(cli, "_require_root", lambda _action: None)
+    monkeypatch.setattr(cli, "_executable_path", lambda: Path("/usr/local/bin/user-updater"))
+    monkeypatch.setattr(cli, "_require_trusted_system_install", lambda _executable: None)
+    monkeypatch.setattr(cli, "detect_graphical_users", lambda: users)
+    monkeypatch.setattr(cli, "UpdateService", ImmediateService)
+
+    assert cli._run_user_tools_now(system_mode=True) == 0
+    assert len(observed) == 2
+    assert len({state_path for state_path, *_ in observed}) == 2
+    assert len({lock_path for _, lock_path, *_ in observed}) == 2
+    assert all(not run_system and task_id == "user-tools" for _, _, run_system, task_id in observed)
 
 
 def test_history_command_shows_recent_personal_tool_runs(
@@ -331,9 +387,7 @@ def test_system_retry_uses_pkexec_instead_of_running_as_the_desktop_user(
         request=tmp_path / "request.json",
         log_file=tmp_path / "updater.log",
     )
-    paths.policy.write_text(
-        "retry:\n  system:\n    user_manual_attempts: 1\n", encoding="utf-8"
-    )
+    paths.policy.write_text("retry:\n  system:\n    user_manual_attempts: 1\n", encoding="utf-8")
     StateStore(paths.state).save(
         UpdateState(phase="failed", run_id="failed-system-run", returncode=1)
     )
