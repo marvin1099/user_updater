@@ -7,7 +7,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QCheckBox, QLabel, QWidget
 
 from user_updater.gui import admin as admin_gui
 from user_updater.gui.admin import AdminSettingsDialog
@@ -199,6 +199,13 @@ def test_dismissing_unreadable_state_does_not_respawn_until_requested(tmp_path: 
 def test_admin_settings_dialog_builds_a_valid_policy_mapping(tmp_path: Path) -> None:
     _application()
     dialog = AdminSettingsDialog(load_policy())
+    retry_note = next(
+        label
+        for label in dialog.findChildren(QLabel)
+        if label.text().startswith("Automatic retries run after a failure.")
+    )
+    assert dialog.width() == 520
+    assert retry_note.wordWrap()
     assert "scripts" in dialog.allow_custom_tools.text().lower()
     assert dialog.allow_custom_tools.isChecked()
     assert dialog.run_system_now_button.isEnabled()
@@ -323,25 +330,15 @@ def test_admin_helper_path_matches_installed_gui_entrypoint(monkeypatch) -> None
     assert admin_gui._admin_helper_path() == Path("/usr/local/bin/user-updater-admin")
 
 
-def test_admin_settings_and_run_action_share_the_cached_polkit_helper(
+def test_admin_settings_are_nonmodal_and_save_through_the_cached_polkit_helper(
     monkeypatch, tmp_path: Path
 ) -> None:
-    _application()
+    app = _application()
     helper = "/usr/local/bin/user-updater-admin"
     commands: list[list[str]] = []
     saved: list[object] = []
     policy_file = tmp_path / "project.yaml"
     policy_file.write_text("version: 1\n", encoding="utf-8")
-
-    class AcceptedDialog:
-        def __init__(self, _policy, _parent) -> None:
-            pass
-
-        def exec(self):
-            return admin_gui.QDialog.DialogCode.Accepted
-
-        def policy_mapping(self):
-            return {"version": 1}
 
     monkeypatch.setattr(admin_gui.os, "geteuid", lambda: 1000)
     monkeypatch.setattr(admin_gui, "_trusted_admin_helper", lambda: helper)
@@ -350,20 +347,30 @@ def test_admin_settings_and_run_action_share_the_cached_polkit_helper(
         "which",
         lambda name: "/usr/bin/pkexec" if name == "pkexec" else None,
     )
-    monkeypatch.setattr(admin_gui, "AdminSettingsDialog", AcceptedDialog)
 
     def fake_run(arguments, **_kwargs):
         commands.append(arguments)
         return type("Completed", (), {"returncode": 0, "stderr": ""})()
 
     monkeypatch.setattr(admin_gui.subprocess, "run", fake_run)
-    admin_gui.open_admin_settings(None, policy_file, saved.append)
+    parent = QWidget()
+    admin_gui.open_admin_settings(parent, policy_file, saved.append)
+    dialog = parent._admin_settings_dialog
+    app.processEvents()
+
+    assert not dialog.isModal()
+    assert dialog.isVisible()
+    assert app.activeModalWidget() is None
+    dialog.accept()
+    app.processEvents()
 
     assert commands == [
         ["/usr/bin/pkexec", helper, "authorize-settings"],
         ["/usr/bin/pkexec", helper, "write-policy"],
     ]
     assert len(saved) == 1
+    assert parent._admin_settings_dialog is None
+    parent.deleteLater()
 
 
 def test_system_window_keeps_system_and_user_responses_separate(tmp_path: Path) -> None:
@@ -577,6 +584,7 @@ def test_full_details_has_collapsible_task_sections_and_returns_after_completion
     assert window.system_section.header.isVisible()
     assert window.user_section.header.isVisible()
     assert window.history_section.header.isVisible()
+    assert isinstance(window.system_section.header, QCheckBox)
     assert abs(window.system_section.height() - window.user_section.height()) <= 12
     assert window.system_tab.terminal.isReadOnly()
     assert window.user_tab.terminal.isReadOnly()
@@ -622,6 +630,26 @@ def test_details_single_open_section_uses_available_height(tmp_path: Path) -> No
     assert window.user_section.is_expanded()
     assert abs(window.system_section.height() - window.user_section.height()) <= 12
 
+    window.deleteLater()
+
+
+def test_details_empty_state_is_top_aligned_when_all_sections_are_closed(
+    tmp_path: Path,
+) -> None:
+    _application()
+    window = FullDetailsWindow(
+        StateStore(tmp_path / "system.json"),
+        StateStore(tmp_path / "user.json"),
+    )
+
+    for section in (window.system_section, window.user_section, window.history_section):
+        section.header.setChecked(False)
+
+    assert window.empty_state.text() == "Click on a checkbox above to see info"
+    assert not window.empty_state.isHidden()
+    window.show()
+    _application().processEvents()
+    assert window.empty_state.y() < window.back_button.y()
     window.deleteLater()
 
 
@@ -758,7 +786,7 @@ def test_system_retry_button_requests_an_admin_authorized_action(tmp_path: Path)
 
 
 def test_users_can_toggle_only_admin_enabled_personal_tools(tmp_path: Path) -> None:
-    _application()
+    app = _application()
     user_store = StateStore(tmp_path / "user.json")
     preferences = UserToolPreferenceStore(
         tmp_path / "config" / "tool_preferences.json",
@@ -776,6 +804,22 @@ def test_users_can_toggle_only_admin_enabled_personal_tools(tmp_path: Path) -> N
     assert all(check.isChecked() for check in window.user_tab.tool_checkboxes.values())
     assert "tools.d" in window.user_tab.custom_tools_checkbox.text()
     assert window.user_tab.custom_tools_checkbox.isChecked()
+    assert not window.user_tab.tools_section.is_expanded()
+    window.show()
+    app.processEvents()
+    window.user_tab.tools_section.header.click()
+    app.processEvents()
+    assert window.user_tab.tools_section.is_expanded()
+    assert (
+        abs(
+            window.user_tab.custom_tools_checkbox.geometry().y()
+            - window.user_tab.save_tools_button.geometry().y()
+        )
+        <= 1
+    )
+    assert window.user_tab.save_tools_button.geometry().x() > (
+        window.user_tab.custom_tools_checkbox.geometry().x()
+    )
     window.user_tab.tool_checkboxes["flatpak"].setChecked(False)
     window.user_tab.custom_tools_checkbox.setChecked(False)
     window.user_tab.save_tools_button.click()

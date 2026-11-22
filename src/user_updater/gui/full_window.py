@@ -61,7 +61,7 @@ class _TaskTab(QWidget):
         self.retry_info.setObjectName("automaticRetryInfo")
         self.retry_info.setWordWrap(True)
         self.retry_info.hide()
-        self.tools_group = QGroupBox("Personal tools enabled for your account")
+        self.tools_group = QGroupBox()
         self.tool_checks_widget = QWidget(self.tools_group)
         self.tool_check_layout = QHBoxLayout(self.tool_checks_widget)
         self.tool_check_layout.setContentsMargins(0, 0, 0, 0)
@@ -72,12 +72,16 @@ class _TaskTab(QWidget):
         self.save_tools_button = QPushButton("Save tool choices")
         tools_layout = QVBoxLayout(self.tools_group)
         tools_layout.addWidget(self.tool_checks_widget)
-        tools_layout.addWidget(self.custom_tools_checkbox)
         tools_controls = QHBoxLayout()
+        tools_controls.addWidget(self.custom_tools_checkbox)
         tools_controls.addWidget(self.tool_preferences_status, stretch=1)
         tools_controls.addWidget(self.save_tools_button)
         tools_layout.addLayout(tools_controls)
-        self.tools_group.hide()
+        self.tools_section = CollapsibleSection(
+            "Personal tools enabled for your account",
+            self.tools_group,
+            expanded=False,
+        )
         self.terminal = QPlainTextEdit()
         self._terminal_source = ""
         self.retry_button = QPushButton("Retry failed update")
@@ -94,7 +98,7 @@ class _TaskTab(QWidget):
         layout.addLayout(heading)
         layout.addWidget(self.next_run)
         layout.addWidget(self.retry_info)
-        layout.addWidget(self.tools_group)
+        layout.addWidget(self.tools_section)
         layout.addWidget(self.terminal, stretch=1)
         controls = QHBoxLayout()
         controls.addStretch(1)
@@ -208,11 +212,11 @@ class FullDetailsWindow(QWidget):
         self.setMinimumSize(640, 500)
         self.setStyleSheet(
             "QWidget { background: #20242b; color: #f2f4f8; }"
-            "QToolButton#detailsSectionToggle {"
+            "QCheckBox#detailsSectionToggle {"
             "padding: 7px 12px; border: 1px solid #48515d; border-radius: 4px;"
             "background: #292e36;"
             "}"
-            "QToolButton#detailsSectionToggle:checked {"
+            "QCheckBox#detailsSectionToggle:checked {"
             "background: #36536d; border-color: #79a9d6;"
             "}"
         )
@@ -231,14 +235,20 @@ class FullDetailsWindow(QWidget):
         self.history_view.setReadOnly(True)
         self.history_view.setPlaceholderText("No completed update runs recorded.")
         self.system_section = CollapsibleSection(
-            "System updates", self.system_tab, header_inside=False
+            "System updates", self.system_tab, header_inside=False, checkbox_header=True
         )
-        self.user_section = CollapsibleSection("User tools", self.user_tab, header_inside=False)
+        self.user_section = CollapsibleSection(
+            "User tools", self.user_tab, header_inside=False, checkbox_header=True
+        )
         self.history_section = CollapsibleSection(
-            "Run history", self.history_view, header_inside=False
+            "Run history", self.history_view, header_inside=False, checkbox_header=True
         )
+        self.empty_state = QLabel("Click on a checkbox above to see info")
+        self.empty_state.setObjectName("emptyDetailsMessage")
+        self.empty_state.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         for section in (self.system_section, self.user_section, self.history_section):
             section.header.setObjectName("detailsSectionToggle")
+            section.header.toggled.connect(self._update_empty_state)
         section_tabs = QHBoxLayout()
         section_tabs.setContentsMargins(0, 0, 0, 0)
         section_tabs.setSpacing(4)
@@ -249,6 +259,7 @@ class FullDetailsWindow(QWidget):
         sections_layout = QVBoxLayout()
         sections_layout.setContentsMargins(0, 0, 0, 0)
         sections_layout.setSpacing(6)
+        sections_layout.addWidget(self.empty_state, alignment=Qt.AlignmentFlag.AlignTop)
         sections_layout.addWidget(self.system_section, stretch=1)
         sections_layout.addWidget(self.user_section, stretch=1)
         sections_layout.addWidget(self.history_section, stretch=1)
@@ -347,6 +358,14 @@ class FullDetailsWindow(QWidget):
         self.system_section.set_expanded("system" in expanded)
         self.user_section.set_expanded("user" in expanded)
         self.history_section.set_expanded(not expanded)
+        self._update_empty_state()
+
+    def _update_empty_state(self) -> None:
+        sections_open = any(
+            section.is_expanded()
+            for section in (self.system_section, self.user_section, self.history_section)
+        )
+        self.empty_state.setVisible(not sections_open)
 
     def position_bottom_right(self) -> None:
         """Place the details window at the bottom right when the compositor allows it."""
@@ -437,7 +456,7 @@ class FullDetailsWindow(QWidget):
             and self.user_tools_enabled
             and self.user_tool_preferences is not None
         )
-        self.user_tab.tools_group.setVisible(visible)
+        self.user_tab.tools_section.setVisible(visible)
 
     def _save_user_tool_preferences(self) -> None:
         if self.user_tool_preferences is None or not self.user_tools_enabled:

@@ -10,7 +10,7 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 
-from PySide6.QtCore import QProcess, QTime, QTimer
+from PySide6.QtCore import QProcess, Qt, QTime, QTimer
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -45,7 +45,7 @@ class AdminSettingsDialog(QDialog):
         super().__init__(parent)
         self.policy = policy
         self.setWindowTitle("User Updater — Administrator settings")
-        self.resize(560, 720)
+        self.resize(520, 720)
         content = QWidget(self)
         form = QFormLayout(content)
 
@@ -102,12 +102,12 @@ class AdminSettingsDialog(QDialog):
 
         retry_group = QGroupBox("Retry behavior")
         retry_layout = QVBoxLayout(retry_group)
-        retry_layout.addWidget(
-            QLabel(
-                "Automatic retries run after a failure. User-requested retries are capped "
-                "per scheduled update; system retries still require polkit authorization."
-            )
+        retry_note = QLabel(
+            "Automatic retries run after a failure. User-requested retries are capped "
+            "per scheduled update; system retries still require polkit authorization."
         )
+        retry_note.setWordWrap(True)
+        retry_layout.addWidget(retry_note)
         system_retry_group = QGroupBox("System updates")
         system_retry_form = QFormLayout(system_retry_group)
         self.system_automatic_retries = _spin(policy.retry.system.automatic_attempts, 0, 5)
@@ -305,7 +305,13 @@ def open_admin_settings(
     policy_file: Path,
     on_saved,
 ) -> None:
-    """Authenticate before showing settings, then save through the narrow root helper."""
+    """Authenticate, then show a nonmodal settings dialog using the narrow root helper."""
+    existing_dialog = getattr(parent, "_admin_settings_dialog", None)
+    if existing_dialog is not None and existing_dialog.isVisible():
+        existing_dialog.raise_()
+        existing_dialog.activateWindow()
+        return
+
     try:
         pkexec = shutil.which("pkexec")
         helper: str | None = None
@@ -329,33 +335,48 @@ def open_admin_settings(
                 return
 
         policy = load_policy(policy_file)
-        dialog = AdminSettingsDialog(policy, parent)
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
-        mapping = dialog.policy_mapping()
+        dialog = AdminSettingsDialog(policy)
+        dialog.setWindowModality(Qt.WindowModality.NonModal)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        parent._admin_settings_dialog = dialog
 
-        if os.geteuid() == 0:
-            saved = validate_policy_data(mapping)
-            from ..policy import write_policy
+        def save_dialog_policy() -> None:
+            try:
+                mapping = dialog.policy_mapping()
+                if os.geteuid() == 0:
+                    saved = validate_policy_data(mapping)
+                    from ..policy import write_policy
 
-            write_policy(policy_file, mapping)
-            on_saved(saved)
-            return
+                    write_policy(policy_file, mapping)
+                    on_saved(saved)
+                    return
 
-        assert pkexec is not None and helper is not None
-        result = subprocess.run(
-            [pkexec, helper, "write-policy"],
-            input=json.dumps(mapping),
-            capture_output=True,
-            text=True,
-            timeout=120,
-            check=False,
-        )
-        if result.returncode != 0:
-            detail = result.stderr.strip() or "Could not save administrator policy."
-            QMessageBox.warning(parent, "Administrator settings", detail)
-            return
-        on_saved(load_policy(policy_file))
+                assert pkexec is not None and helper is not None
+                result = subprocess.run(
+                    [pkexec, helper, "write-policy"],
+                    input=json.dumps(mapping),
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                    check=False,
+                )
+                if result.returncode != 0:
+                    detail = result.stderr.strip() or "Could not save administrator policy."
+                    QMessageBox.warning(parent, "Administrator settings", detail)
+                    return
+                on_saved(load_policy(policy_file))
+            except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
+                QMessageBox.warning(parent, "Administrator settings", str(exc))
+
+        def clear_dialog(_result: int) -> None:
+            if getattr(parent, "_admin_settings_dialog", None) is dialog:
+                parent._admin_settings_dialog = None
+
+        dialog.accepted.connect(save_dialog_policy)
+        dialog.finished.connect(clear_dialog)
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
     except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
         QMessageBox.warning(parent, "Administrator settings", str(exc))
 
