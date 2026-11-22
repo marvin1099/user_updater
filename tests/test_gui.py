@@ -7,7 +7,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QApplication, QCheckBox, QLabel, QPushButton, QWidget
+from PySide6.QtWidgets import QApplication, QCheckBox, QLabel, QWidget
 
 from user_updater.gui import admin as admin_gui
 from user_updater.gui.admin import AdminSettingsDialog
@@ -116,36 +116,6 @@ def test_compact_confirmation_can_start_personal_tools_now(tmp_path: Path) -> No
     window.defer_button.click()
 
     assert '"action":"start_now"' in request_file.read_text(encoding="utf-8")
-    window.deleteLater()
-
-
-def test_system_rescheduling_preview_is_isolated_and_has_no_update_now(tmp_path: Path) -> None:
-    _application()
-    policy = load_policy()
-    user_store = StateStore(tmp_path / "user.json")
-    system_store = StateStore(tmp_path / "system.json")
-    window = UpdaterWindow(
-        policy,
-        user_store,
-        tmp_path / "user-request.json",
-        start_timer=False,
-        system_state_store=system_store,
-        system_request_file=tmp_path / "system-request.json",
-    )
-
-    window.show_reschedule_preview("system")
-    preview = window._reschedule_previews[-1]
-    buttons = {button.text(): button for button in preview.findChildren(QPushButton)}
-
-    assert preview.isVisible()
-    assert "Confirm" in buttons
-    assert "Update now" not in buttons
-    preview_choice = preview.findChild(type(window.defer_choice))
-    assert preview_choice is not None
-    assert preview_choice.findData("now") == -1
-    assert system_store.load().phase == "idle"
-    assert user_store.load().phase == "idle"
-    preview.close()
     window.deleteLater()
 
 
@@ -315,7 +285,7 @@ def test_admin_settings_dialog_builds_a_valid_policy_mapping(tmp_path: Path) -> 
     assert dialog.schedule_group.title() == "Update schedules"
     dialog.testing_section.header.click()
     assert dialog.testing_section.is_expanded()
-    assert "border: none" in dialog.testing_section.styleSheet()
+    assert "border: 1px solid palette(mid)" in dialog.testing_section.styleSheet()
     assert "border: none" in dialog.testing_section.content.styleSheet()
 
     mapping = dialog.policy_mapping()
@@ -345,24 +315,28 @@ def test_admin_settings_dialog_builds_a_valid_policy_mapping(tmp_path: Path) -> 
     assert dialog.testing_section.header.x() < dialog.testing_section.width() / 2
     dialog.testing_section.header.click()
     assert not dialog.testing_section.is_expanded()
-    assert "border: none" in dialog.testing_section.styleSheet()
+    assert "border: 1px solid palette(mid)" in dialog.testing_section.styleSheet()
     dialog.deleteLater()
 
 
-def test_testing_buttons_preview_unsaved_reschedule_policy() -> None:
+def test_testing_buttons_schedule_real_prompts_and_stack_vertically() -> None:
     _application()
     dialog = AdminSettingsDialog(load_policy())
-    previews: list[tuple[str, object]] = []
-    dialog.reschedule_preview_requested.connect(
-        lambda task_id, policy: previews.append((task_id, policy))
+    tasks: list[str] = []
+    dialog.schedule_prompt_requested.connect(tasks.append)
+
+    dialog.schedule_user_prompt_button.click()
+    dialog.schedule_system_prompt_button.click()
+
+    assert tasks == ["user-tools", "system"]
+    buttons_layout = dialog.schedule_user_prompt_button.parentWidget().layout()
+    assert buttons_layout.count() == 2
+    assert buttons_layout.itemAt(0).widget() is dialog.schedule_user_prompt_button
+    assert buttons_layout.itemAt(1).widget() is dialog.schedule_system_prompt_button
+    assert any(
+        "starts when its response window ends" in label.text()
+        for label in dialog.testing_section.content.findChildren(QLabel)
     )
-    dialog.max_user_tools_deferral.setValue(36)
-
-    dialog.preview_user_rescheduling_button.click()
-    dialog.preview_system_rescheduling_button.click()
-
-    assert [task_id for task_id, _policy in previews] == ["user-tools", "system"]
-    assert all(policy.interaction.max_user_tools_deferral_hours == 36 for _, policy in previews)
     dialog.deleteLater()
 
 

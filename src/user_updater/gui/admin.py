@@ -41,7 +41,7 @@ _TOOLS = ("flatpak", "pipx", "pip", "npm", "cargo", "gem")
 class AdminSettingsDialog(QDialog):
     """Edit the constrained administrator policy without running Qt as root."""
 
-    reschedule_preview_requested = Signal(str, object)
+    schedule_prompt_requested = Signal(str)
 
     def __init__(self, policy: Policy, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -133,24 +133,39 @@ class AdminSettingsDialog(QDialog):
         testing_form.addRow("Next user-tool updates to force-fail", self.user_forced_failures)
         testing_form.addRow("Next system updates to force-success", self.system_forced_successes)
         testing_form.addRow("Next user-tool updates to force-success", self.user_forced_successes)
-        self.preview_user_rescheduling_button = QPushButton("Preview personal-tool rescheduling")
-        self.preview_system_rescheduling_button = QPushButton("Preview system rescheduling")
-        self.preview_user_rescheduling_button.clicked.connect(
-            lambda: self._emit_reschedule_preview("user-tools")
+        self.schedule_user_prompt_button = QPushButton("Schedule personal-tool update now")
+        self.schedule_system_prompt_button = QPushButton("Schedule system update now")
+        self.schedule_user_prompt_button.setToolTip(
+            "Create a real personal-tool update prompt for each active desktop user. "
+            "Updates start after the response window unless a permitted delay is confirmed."
         )
-        self.preview_system_rescheduling_button.clicked.connect(
-            lambda: self._emit_reschedule_preview("system")
+        self.schedule_system_prompt_button.setToolTip(
+            "Create a real system-update prompt. Updates start after the response window "
+            "unless a permitted delay is confirmed."
         )
-        preview_buttons = QWidget(testing_content)
-        preview_buttons_layout = QHBoxLayout(preview_buttons)
-        preview_buttons_layout.setContentsMargins(0, 0, 0, 0)
-        preview_buttons_layout.addWidget(self.preview_user_rescheduling_button)
-        preview_buttons_layout.addWidget(self.preview_system_rescheduling_button)
-        testing_form.addRow("Preview response prompts", preview_buttons)
+        self.schedule_user_prompt_button.setEnabled(policy.updates.run_user_tools)
+        self.schedule_system_prompt_button.setEnabled(policy.updates.run_system)
+        self.run_user_tools.toggled.connect(self.schedule_user_prompt_button.setEnabled)
+        self.run_system.toggled.connect(self.schedule_system_prompt_button.setEnabled)
+        self.schedule_user_prompt_button.clicked.connect(
+            lambda: self.schedule_prompt_requested.emit("user-tools")
+        )
+        self.schedule_system_prompt_button.clicked.connect(
+            lambda: self.schedule_prompt_requested.emit("system")
+        )
+        schedule_buttons = QWidget(testing_content)
+        schedule_buttons_layout = QVBoxLayout(schedule_buttons)
+        schedule_buttons_layout.setContentsMargins(0, 0, 0, 0)
+        schedule_buttons_layout.setSpacing(4)
+        schedule_buttons_layout.addWidget(self.schedule_user_prompt_button)
+        schedule_buttons_layout.addWidget(self.schedule_system_prompt_button)
+        testing_form.addRow("Schedule a due update", schedule_buttons)
         testing_note = QLabel(
-            "These one-shot simulations skip all update commands. Each active user's "
-            "tool-update attempt consumes one count. The prompt previews do not run an "
-            "update or change saved state."
+            "Save a forced success/failure outcome before scheduling a test; it skips update "
+            "commands when the run starts. Without one, this schedules a real due update: it "
+            "appears in the compact updater and starts when its response window ends unless a "
+            "permitted delay is confirmed. Personal-tool prompts are scheduled for all active "
+            "desktop users."
         )
         testing_note.setWordWrap(True)
         testing_form.addRow(testing_note)
@@ -158,8 +173,10 @@ class AdminSettingsDialog(QDialog):
         self.testing_section.setObjectName("testingSection")
         self.testing_section.content.setObjectName("testingSectionContent")
         self.testing_section.setStyleSheet(
-            "QWidget#testingSection { border: none; }"
-            "QWidget#testingSection QToolButton { border: none; background: transparent; }"
+            "QWidget#testingSection { border: 1px solid palette(mid); border-radius: 4px; "
+            "padding: 3px; }"
+            "QWidget#testingSection QToolButton { border: none; background: transparent; "
+            "padding: 2px; }"
         )
         self.testing_section.content.setStyleSheet(
             "QWidget#testingSectionContent { border: none; }"
@@ -335,20 +352,12 @@ class AdminSettingsDialog(QDialog):
             return
         self.accept()
 
-    def _emit_reschedule_preview(self, task_id: str) -> None:
-        try:
-            preview_policy = validate_policy_data(self.policy_mapping())
-        except PolicyError as exc:
-            QMessageBox.warning(self, "Invalid settings", str(exc))
-            return
-        self.reschedule_preview_requested.emit(task_id, preview_policy)
-
 
 def open_admin_settings(
     parent: QWidget,
     policy_file: Path,
     on_saved,
-    on_reschedule_preview=None,
+    on_schedule_prompt=None,
 ) -> None:
     """Authenticate, then show a nonmodal settings dialog using the narrow root helper."""
     existing_dialog = getattr(parent, "_admin_settings_dialog", None)
@@ -384,8 +393,8 @@ def open_admin_settings(
         dialog.setWindowModality(Qt.WindowModality.NonModal)
         dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         parent._admin_settings_dialog = dialog
-        if on_reschedule_preview is not None:
-            dialog.reschedule_preview_requested.connect(on_reschedule_preview)
+        if on_schedule_prompt is not None:
+            dialog.schedule_prompt_requested.connect(on_schedule_prompt)
 
         def save_dialog_policy() -> None:
             try:
@@ -501,6 +510,57 @@ def start_user_tools_now(parent: QWidget) -> None:
     started, _pid = QProcess.startDetached(pkexec, [helper, "run-user-tools-now"])
     if not started:
         QMessageBox.warning(parent, "User updates", "Could not start pkexec.")
+
+
+def schedule_update_prompt(parent: QWidget, task_id: str) -> None:
+    """Ask the trusted root helper to schedule a real prompt for one task."""
+    actions = {
+        "system": ("schedule-system-prompt", "system update"),
+        "user-tools": ("schedule-user-tools-prompt", "personal-tool update"),
+    }
+    try:
+        action, label = actions[task_id]
+        helper = _trusted_admin_helper()
+        pkexec = shutil.which("pkexec")
+        if pkexec is None:
+            raise RuntimeError("pkexec is required to schedule an update prompt")
+    except (KeyError, OSError, RuntimeError, ValueError) as exc:
+        QMessageBox.warning(parent, "Schedule update", str(exc))
+        return
+
+    process = QProcess(parent)
+    process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
+    processes = getattr(parent, "_schedule_prompt_processes", [])
+    processes.append(process)
+    parent._schedule_prompt_processes = processes
+    completed = False
+
+    def finish(exit_code: int, detail: str = "") -> None:
+        nonlocal completed
+        if completed:
+            return
+        completed = True
+        processes.remove(process)
+        if exit_code != 0:
+            output = bytes(process.readAllStandardOutput()).decode(errors="replace").strip()
+            QMessageBox.warning(
+                parent,
+                "Schedule update",
+                detail or output or f"Could not schedule the {label} prompt.",
+            )
+        else:
+            parent.refresh()
+        process.deleteLater()
+
+    process.finished.connect(lambda exit_code, _status: finish(exit_code))
+    process.errorOccurred.connect(
+        lambda error: (
+            finish(-1, process.errorString())
+            if error == QProcess.ProcessError.FailedToStart
+            else None
+        )
+    )
+    process.start(pkexec, [helper, action])
 
 
 def _spin(value: int, minimum: int, maximum: int) -> QSpinBox:

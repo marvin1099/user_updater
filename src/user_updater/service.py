@@ -102,6 +102,17 @@ class UpdateService:
         current = now or self.clock()
         return self._with_worker_lock(lambda: self._run_now_locked(current))
 
+    def schedule_prompt_now(self, now: datetime | None = None) -> TickAction:
+        """Schedule a fresh due prompt without running updates before its response window."""
+        current = now or self.clock()
+
+        def schedule() -> TickAction:
+            action = self.coordinator.schedule_prompt_now(current)
+            self.on_log("An administrator scheduled an update prompt.")
+            return action
+
+        return self._with_worker_lock(schedule)
+
     def _with_worker_lock(self, operation: Callable[[], TickAction]) -> TickAction:
         if self.lock_file is None:
             return operation()

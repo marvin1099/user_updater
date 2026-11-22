@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-import tempfile
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
-from uuid import uuid4
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QComboBox,
-    QDialog,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -199,7 +196,6 @@ class UpdaterWindow(QWidget):
         self._status_error_dismissed = False
         self._system_retry_requested_for: str | None = None
         self._user_retry_requested_for: str | None = None
-        self._reschedule_previews: list[QDialog] = []
         self.setWindowTitle("User Updater Status")
         self._build_ui(request_file, system_request_file, admin_enabled)
         self._placement = WindowPlacement(self, title=self.windowTitle())
@@ -315,65 +311,6 @@ class UpdaterWindow(QWidget):
         if self.system_panel is not None:
             self.system_panel.policy = policy
         self.refresh()
-
-    def show_reschedule_preview(self, task_id: str, policy: Policy | None = None) -> None:
-        """Show an isolated response prompt using the current, possibly unsaved, policy."""
-        if task_id not in {"system", "user-tools"}:
-            raise ValueError(f"unknown rescheduling preview task: {task_id}")
-        preview_policy = policy or self.policy
-        is_system = task_id == "system"
-        title = "System update" if is_system else "Your user tools"
-        response_minutes = (
-            preview_policy.schedule.response_minutes
-            if is_system
-            else preview_policy.schedule.user_tools_response_minutes
-        )
-        now = datetime.now().astimezone()
-
-        preview = QDialog(self, Qt.WindowType.Window)
-        preview.setWindowTitle(f"Rescheduling preview — {title}")
-        preview.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
-        temporary_directory = tempfile.TemporaryDirectory(prefix="user-updater-preview-")
-        request_file = Path(temporary_directory.name) / "request.json"
-        panel = _TaskPanel(
-            title,
-            preview_policy,
-            request_file,
-            preview,
-            task_id=task_id,
-            allow_start_now=not is_system,
-        )
-        panel.apply_state(
-            UpdateState(
-                phase="awaiting_response",
-                run_id=f"preview-{uuid4().hex}",
-                scheduled_for=now.isoformat(),
-                response_deadline=(now + timedelta(minutes=response_minutes)).isoformat(),
-                message="Preview only. No update will be started.",
-            )
-        )
-        explanation = QLabel(
-            "Preview only — this does not start an update or change saved updater state."
-        )
-        explanation.setWordWrap(True)
-        close_button = QPushButton("Close preview")
-        close_button.clicked.connect(preview.close)
-        layout = QVBoxLayout(preview)
-        layout.addWidget(explanation)
-        layout.addWidget(panel)
-        layout.addWidget(close_button)
-        preview._temporary_directory = temporary_directory
-        self._reschedule_previews.append(preview)
-
-        def cleanup_preview(_result: int) -> None:
-            temporary_directory.cleanup()
-            if preview in self._reschedule_previews:
-                self._reschedule_previews.remove(preview)
-
-        preview.finished.connect(cleanup_preview)
-        preview.show()
-        preview.raise_()
-        preview.activateWindow()
 
     def show_status(self) -> None:
         self._full_mode = False

@@ -14,7 +14,7 @@ from ..policy import load_policy
 from ..requests import task_request_path
 from ..state import StateStore
 from ..tool_preferences import UserToolPreferenceStore
-from .admin import open_admin_settings, start_system_retry
+from .admin import open_admin_settings, schedule_update_prompt, start_system_retry
 from .full_window import FullDetailsWindow
 from .window import UpdaterWindow
 
@@ -96,7 +96,7 @@ def run_gui(system_mode: bool = False) -> int:
             window,
             paths.policy,
             policy_saved,
-            on_reschedule_preview=window.show_reschedule_preview,
+            on_schedule_prompt=lambda task_id: schedule_update_prompt(window, task_id),
         )
     )
     window.system_retry_requested.connect(lambda: start_system_retry(window))

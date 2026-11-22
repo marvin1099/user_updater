@@ -332,6 +332,47 @@ def test_admin_user_tools_run_now_logs_the_correct_task(tmp_path: Path) -> None:
     assert logs[0] == "An administrator started personal-tool updates immediately."
 
 
+def test_scheduled_prompt_waits_for_response_before_running_updates(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "system.json", file_mode=0o644)
+    workflow = FakeWorkflow()
+    service = UpdateService(
+        load_policy(),
+        store,
+        workflow,
+        task_id="system",
+        response_minutes=2,
+        clock=lambda: NOW + timedelta(minutes=2),
+    )
+
+    action = service.schedule_prompt_now(NOW)
+
+    scheduled = store.load()
+    assert action.value == "waiting_for_response"
+    assert scheduled.phase == "awaiting_response"
+    assert scheduled.scheduled_for == NOW.isoformat()
+    assert scheduled.response_deadline == (NOW + timedelta(minutes=2)).isoformat()
+    assert workflow.calls == 0
+
+    assert service.tick(NOW + timedelta(minutes=1)).value == "waiting_for_response"
+    assert workflow.calls == 0
+    assert service.tick(NOW + timedelta(minutes=2)).value == "run"
+    assert workflow.calls == 1
+    assert store.load().phase == "succeeded"
+
+
+def test_scheduled_prompt_does_not_replace_an_active_task(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "system.json")
+    store.save(UpdateState(phase="awaiting_response", run_id="existing"))
+    workflow = FakeWorkflow()
+    service = UpdateService(load_policy(), store, workflow, task_id="system")
+
+    with pytest.raises(ValueError, match="cannot schedule another update"):
+        service.schedule_prompt_now(NOW)
+
+    assert store.load().run_id == "existing"
+    assert workflow.calls == 0
+
+
 def test_manual_retry_is_refused_unless_the_latest_state_failed(tmp_path: Path) -> None:
     store = StateStore(tmp_path / "state.json")
     store.save(UpdateState(phase="running", run_id="live-run"))

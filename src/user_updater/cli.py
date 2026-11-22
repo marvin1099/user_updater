@@ -478,6 +478,103 @@ def _run_user_tools_now(system_mode: bool) -> int:
     return int(failed)
 
 
+def _schedule_prompt(task_id: str, system_mode: bool) -> int:
+    """Schedule a due response prompt without immediately running update commands."""
+    if not system_mode:
+        raise ValueError("scheduling administrator update prompts requires --system")
+    _require_root("scheduling administrator update prompts")
+    executable = _executable_path()
+    _require_trusted_system_install(executable)
+    paths = system_paths()
+    policy = load_policy(paths.policy if paths.policy.exists() else None)
+    logger = configure_logging(paths.log_file)
+
+    if task_id == "system":
+        if not policy.updates.run_system:
+            raise ValueError("machine-wide updates are disabled by administrator policy")
+        system_policy = dataclasses.replace(
+            policy,
+            updates=dataclasses.replace(
+                policy.updates,
+                run_user_tools=False,
+                allow_custom_user_tools=False,
+            ),
+        )
+        state_store = StateStore(paths.state, file_mode=0o644)
+        builder = BuilderAccountManager(paths.builder_home, paths.sudoers, system_policy)
+        workflow = UpdateWorkflow(
+            system_policy,
+            builder_manager=builder,
+            session_detector=lambda: [],
+            test_outcome=lambda: consume_test_outcome(paths.policy, "system"),
+        )
+        service = UpdateService(
+            system_policy,
+            state_store,
+            workflow,
+            request_homes=local_request_homes,
+            on_log=logger.info,
+            task_id="system",
+            lock_file=paths.state.parent / "locks" / "system.lock",
+        )
+        action = service.schedule_prompt_now()
+        if action is TickAction.WORKER_ALREADY_ACTIVE:
+            raise RuntimeError("the system update worker is already active")
+        print(state_store.load().message)
+        return 0
+
+    if task_id != "user-tools":
+        raise ValueError(f"unknown update task: {task_id}")
+    if not policy.updates.run_user_tools:
+        raise ValueError("personal-tool updates are disabled by administrator policy")
+    desktop_users = detect_graphical_users()
+    if not desktop_users:
+        raise ValueError("there is no active local desktop session to schedule")
+
+    scheduled_users: list[str] = []
+    errors: list[str] = []
+    for user in desktop_users:
+        user_policy = _user_policy_for(user, policy, logger)
+        state_store = StateStore(paths.user_state_dir / f"{user.uid}.json", file_mode=0o644)
+        workflow = UpdateWorkflow(
+            user_policy,
+            builder_manager=None,
+            session_detector=lambda selected=user: [selected],
+            test_outcome=lambda: consume_test_outcome(paths.policy, "user_tools"),
+        )
+        service = UpdateService(
+            user_policy,
+            state_store,
+            workflow,
+            request_homes=lambda selected=user: [RequestHome(selected.home, selected.uid)],
+            on_log=logger.info,
+            task_id="user-tools",
+            interval_hours=policy.schedule.user_tools_interval_hours,
+            response_minutes=policy.schedule.user_tools_response_minutes,
+            lock_file=paths.state.parent / "locks" / f"user-tools-{user.uid}.lock",
+        )
+        try:
+            action = service.schedule_prompt_now()
+        except ValueError as exc:
+            errors.append(f"{user.username}: {exc}")
+            continue
+        if action is TickAction.WORKER_ALREADY_ACTIVE:
+            errors.append(f"{user.username}: the personal-tool update worker is already active")
+            continue
+        scheduled_users.append(user.username)
+
+    if not scheduled_users:
+        detail = "; ".join(errors) if errors else "no personal-tool prompts were scheduled"
+        raise ValueError(detail)
+    print(
+        "Scheduled personal-tool update prompt(s) for "
+        f"{', '.join(scheduled_users)}. They will start after their response windows."
+    )
+    for error in errors:
+        print(f"Could not schedule prompt: {error}", file=sys.stderr)
+    return int(bool(errors))
+
+
 def _retry_user() -> int:
     managed_paths = system_paths()
     if managed_paths.policy.is_file():

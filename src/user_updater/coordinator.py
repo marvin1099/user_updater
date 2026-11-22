@@ -161,6 +161,33 @@ class UpdateCoordinator:
         )
         return TickAction.RUN
 
+    def schedule_prompt_now(
+        self,
+        now: datetime,
+        *,
+        message: str = (
+            "An administrator scheduled an update. It will start after the response window."
+        ),
+    ) -> TickAction:
+        """Create a due update prompt without bypassing its response window."""
+        state = self.state_store.load()
+        if state.phase in {"awaiting_response", "deferred", "running"}:
+            raise ValueError(f"cannot schedule another update while this task is {state.phase}")
+
+        run_id = uuid4().hex
+        self.state_store.save(
+            UpdateState(
+                phase="awaiting_response",
+                run_id=run_id,
+                retry_group_id=run_id,
+                scheduled_for=now.isoformat(),
+                next_scheduled_at=now.isoformat(),
+                response_deadline=(now + timedelta(minutes=self.response_minutes)).isoformat(),
+                message=message,
+            )
+        )
+        return TickAction.WAITING_FOR_RESPONSE
+
     def record_output(self, lines: tuple[str, ...], message: str | None = None) -> None:
         state = self.state_store.load()
         self.state_store.save(
