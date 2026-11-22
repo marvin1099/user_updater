@@ -83,17 +83,37 @@ class WindowPlacement:
         title: str,
         margin: int = 20,
         activate_on_show: bool = False,
+        enabled: bool = True,
     ) -> None:
         self.window = window
         self.title = title
         self.margin = margin
         self.activate_on_show = activate_on_show
-        self._layer_shell_enabled = self._configure_layer_shell()
+        self.enabled = enabled
+        self._layer_shell_enabled = self._configure_layer_shell() if enabled else False
+        self._kdotool = (
+            shutil.which("kdotool")
+            if enabled and is_wayland_session() and is_kde_session()
+            else None
+        )
+
+    def set_enabled(self, enabled: bool) -> None:
+        """Update automatic placement after an administrator policy change."""
+        if self.enabled == enabled:
+            return
+        self.enabled = enabled
+        if not enabled:
+            self._kdotool = None
+            return
+        if not self._layer_shell_enabled:
+            self._layer_shell_enabled = self._configure_layer_shell()
         self._kdotool = (
             shutil.which("kdotool") if is_wayland_session() and is_kde_session() else None
         )
 
     def position_bottom_right(self) -> None:
+        if not self.enabled:
+            return
         if self._layer_shell_enabled:
             # LayerShellQt anchors the mapped surface itself, including after output changes.
             return
@@ -154,7 +174,7 @@ class WindowPlacement:
             return False
 
     def _move_with_kdotool(self) -> None:
-        if not self._kdotool:
+        if not self.enabled or not self._kdotool:
             return
         primary_screen = QGuiApplication.primaryScreen()
         if primary_screen is None:

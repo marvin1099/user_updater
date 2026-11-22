@@ -42,5 +42,9 @@ testing:
     fail_next: 0
     succeed_next: 0
 
+window:
+  # Let the desktop compositor or window rules place windows when disabled.
+  automatic_positioning: true
+
 security:
   builder_sudo_mode: package-manager

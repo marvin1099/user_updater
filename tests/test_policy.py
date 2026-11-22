@@ -31,6 +31,7 @@ def test_default_policy_matches_product_defaults() -> None:
     assert policy.interaction.max_user_tools_deferral_hours == 48
     assert policy.interaction.max_system_deferral_hours == 24
     assert policy.updates.run_system is True
+    assert policy.window.automatic_positioning is True
     assert "flatpak" in policy.updates.user_tools
     assert policy.updates.allow_custom_user_tools is True
     assert policy.retry.system.automatic_attempts == 2
@@ -38,6 +39,18 @@ def test_default_policy_matches_product_defaults() -> None:
     assert policy.retry.system.user_manual_attempts == 0
     assert policy.retry.user_tools.automatic_attempts == 2
     assert policy.retry.user_tools.user_manual_attempts == 0
+
+
+def test_automatic_window_positioning_defaults_on_and_can_be_disabled() -> None:
+    policy = load_policy()
+    assert policy.window.automatic_positioning is True
+
+    raw = policy_to_mapping(policy)
+    raw["window"]["automatic_positioning"] = False
+
+    updated = validate_policy_data(raw)
+    assert updated.window.automatic_positioning is False
+    assert policy_to_mapping(updated)["window"]["automatic_positioning"] is False
 
 
 def test_administrator_can_configure_automatic_and_user_retry_limits(tmp_path: Path) -> None:

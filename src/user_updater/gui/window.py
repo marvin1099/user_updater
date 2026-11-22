@@ -231,7 +231,11 @@ class UpdaterWindow(QWidget):
         self._user_retry_requested_for: str | None = None
         self.setWindowTitle("User Updater Status")
         self._build_ui(request_file, system_request_file, admin_enabled)
-        self._placement = WindowPlacement(self, title=self.windowTitle())
+        self._placement = WindowPlacement(
+            self,
+            title=self.windowTitle(),
+            enabled=policy.window.automatic_positioning,
+        )
         if start_timer:
             self._poll_timer = QTimer(self)
             self._poll_timer.timeout.connect(self.refresh)
@@ -333,6 +337,7 @@ class UpdaterWindow(QWidget):
 
     def apply_policy(self, policy: Policy) -> None:
         self.policy = policy
+        self._placement.set_enabled(policy.window.automatic_positioning)
         self.user_panel.policy = policy
         if self.system_panel is not None:
             self.system_panel.policy = policy

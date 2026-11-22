@@ -335,7 +335,9 @@ def test_admin_settings_dialog_builds_a_valid_policy_mapping(tmp_path: Path) -> 
     assert "scripts" in dialog.allow_custom_tools.text().lower()
     assert dialog.allow_custom_tools.isChecked()
     assert dialog.allow_custom_tools.parentWidget().title() == "Personal tools available to users"
+    assert dialog.automatic_window_positioning.isChecked()
     assert dialog.run_system_now_button.isEnabled()
+    dialog.automatic_window_positioning.setChecked(False)
     dialog.run_user_tools.setChecked(False)
     dialog.user_interval.setValue(12)
     dialog.allow_custom_tools.setChecked(False)
@@ -372,6 +374,7 @@ def test_admin_settings_dialog_builds_a_valid_policy_mapping(tmp_path: Path) -> 
     assert mapping["updates"]["run_user_tools"] is False
     assert mapping["updates"]["allow_custom_user_tools"] is False
     assert "flatpak" not in mapping["updates"]["user_tools"]
+    assert mapping["window"]["automatic_positioning"] is False
     assert mapping["schedule"]["user_tools_interval_hours"] == 12
     assert mapping["interaction"] == {
         "allow_deferral": False,
@@ -396,6 +399,28 @@ def test_admin_settings_dialog_builds_a_valid_policy_mapping(tmp_path: Path) -> 
     assert not dialog.testing_section.is_expanded()
     assert isinstance(dialog.testing_section.content, QGroupBox)
     dialog.deleteLater()
+
+
+def test_applying_policy_updates_compact_window_placement_preference(tmp_path: Path) -> None:
+    _application()
+    policy = load_policy()
+    window = UpdaterWindow(
+        policy,
+        StateStore(tmp_path / "state.json"),
+        tmp_path / "request.json",
+        start_timer=False,
+    )
+
+    assert window._placement.enabled
+    window.apply_policy(
+        replace(
+            policy,
+            window=replace(policy.window, automatic_positioning=False),
+        )
+    )
+
+    assert not window._placement.enabled
+    window.deleteLater()
 
 
 def test_testing_buttons_schedule_real_prompts_and_stack_vertically() -> None:
@@ -878,6 +903,20 @@ def test_full_details_has_collapsible_task_sections_and_returns_after_completion
     window.reset_section_expansion()
     assert not window.system_section.is_expanded()
     assert window.history_section.is_expanded()
+    window.deleteLater()
+
+
+def test_full_details_window_accepts_automatic_positioning_policy(tmp_path: Path) -> None:
+    _application()
+    window = FullDetailsWindow(
+        None,
+        StateStore(tmp_path / "user.json"),
+        positioning_enabled=False,
+    )
+
+    assert not window._placement.enabled
+    window.set_positioning_enabled(True)
+    assert window._placement.enabled
     window.deleteLater()
 
 

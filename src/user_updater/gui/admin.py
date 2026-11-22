@@ -221,6 +221,23 @@ class AdminSettingsDialog(QDialog):
         schedules_layout.addWidget(user_schedule)
         form.addRow(self.schedule_group)
 
+        window_group = QGroupBox("Window positioning")
+        window_layout = QVBoxLayout(window_group)
+        self.automatic_window_positioning = QCheckBox("Automatically position updater windows")
+        self.automatic_window_positioning.setObjectName("automaticWindowPositioning")
+        self.automatic_window_positioning.setChecked(policy.window.automatic_positioning)
+        self.automatic_window_positioning.setToolTip(
+            "Place compact and details windows at the bottom-right of the primary display."
+        )
+        window_note = QLabel(
+            "Turn this off to let your desktop compositor or window rules choose the position. "
+            "On layer-shell desktops, restart User Updater for the change to take full effect."
+        )
+        window_note.setWordWrap(True)
+        window_layout.addWidget(self.automatic_window_positioning)
+        window_layout.addWidget(window_note)
+        form.addRow(window_group)
+
         retry_group = QGroupBox("Retry behavior")
         retry_layout = QVBoxLayout(retry_group)
         retry_note = QLabel(
@@ -460,6 +477,10 @@ class AdminSettingsDialog(QDialog):
                     fail_next=self.user_forced_failures.value(),
                     succeed_next=self.user_forced_successes.value(),
                 ),
+            ),
+            window=replace(
+                self.policy.window,
+                automatic_positioning=self.automatic_window_positioning.isChecked(),
             ),
             security=replace(
                 self.policy.security,

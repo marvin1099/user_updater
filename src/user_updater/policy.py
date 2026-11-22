@@ -57,6 +57,7 @@ _DEFAULTS: dict[str, Any] = {
         "system": {"fail_next": 0, "succeed_next": 0},
         "user_tools": {"fail_next": 0, "succeed_next": 0},
     },
+    "window": {"automatic_positioning": True},
     "security": {"builder_sudo_mode": "package-manager"},
 }
 
@@ -123,6 +124,11 @@ class SecurityPolicy:
 
 
 @dataclass(frozen=True)
+class WindowPolicy:
+    automatic_positioning: bool
+
+
+@dataclass(frozen=True)
 class Policy:
     version: int
     schedule: SchedulePolicy
@@ -130,6 +136,7 @@ class Policy:
     updates: UpdatePolicy
     retry: RetryPolicy
     testing: TestingPolicy
+    window: WindowPolicy
     security: SecurityPolicy
 
 
@@ -205,6 +212,7 @@ def policy_to_mapping(policy: Policy) -> dict[str, Any]:
             }
             for task in ("system", "user_tools")
         },
+        "window": {"automatic_positioning": policy.window.automatic_positioning},
         "security": {"builder_sudo_mode": policy.security.builder_sudo_mode},
     }
 
@@ -432,6 +440,13 @@ def _make_policy(raw: dict[str, Any]) -> Policy:
         user_tools=_make_task_testing_policy(testing_raw["user_tools"], "testing.user_tools"),
     )
 
+    window_raw = raw["window"]
+    window = WindowPolicy(
+        automatic_positioning=_boolean(
+            window_raw["automatic_positioning"], "window.automatic_positioning"
+        )
+    )
+
     security_raw = raw["security"]
     sudo_mode = security_raw["builder_sudo_mode"]
     if sudo_mode not in _SUDO_MODES:
@@ -445,6 +460,7 @@ def _make_policy(raw: dict[str, Any]) -> Policy:
         updates=updates,
         retry=retry,
         testing=testing,
+        window=window,
         security=security,
     )
 

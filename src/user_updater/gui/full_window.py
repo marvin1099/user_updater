@@ -178,6 +178,7 @@ class FullDetailsWindow(QWidget):
         user_tool_preferences: UserToolPreferenceStore | None = None,
         system_history_store: RunHistoryStore | None = None,
         user_history_store: RunHistoryStore | None = None,
+        positioning_enabled: bool = True,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -223,6 +224,7 @@ class FullDetailsWindow(QWidget):
             self,
             title=self.windowTitle(),
             activate_on_show=True,
+            enabled=positioning_enabled,
         )
 
         title = QLabel("Update details")
@@ -398,6 +400,10 @@ class FullDetailsWindow(QWidget):
     def position_bottom_right(self) -> None:
         """Place the details window at the bottom right when the compositor allows it."""
         self._placement.position_bottom_right()
+
+    def set_positioning_enabled(self, enabled: bool) -> None:
+        """Apply the administrator's automatic-placement preference."""
+        self._placement.set_enabled(enabled)
 
     @staticmethod
     def _read_state(

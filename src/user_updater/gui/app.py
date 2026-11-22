@@ -65,6 +65,7 @@ def run_gui(system_mode: bool = False) -> int:
         admin_allowed_user_tools=policy.updates.user_tools,
         admin_allows_custom_tools=policy.updates.allow_custom_user_tools,
         user_tool_preferences=user_tool_preferences,
+        positioning_enabled=policy.window.automatic_positioning,
     )
 
     def show_full_details() -> None:
@@ -84,6 +85,7 @@ def run_gui(system_mode: bool = False) -> int:
 
     def policy_saved(updated_policy) -> None:
         window.apply_policy(updated_policy)
+        full_window.set_positioning_enabled(updated_policy.window.automatic_positioning)
         full_window.system_enabled = system_mode and updated_policy.updates.run_system
         full_window.system_manual_retry_limit = updated_policy.retry.system.user_manual_attempts
         full_window.user_manual_retry_limit = updated_policy.retry.user_tools.user_manual_attempts

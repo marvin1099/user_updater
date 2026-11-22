@@ -59,3 +59,27 @@ def test_qt_fallback_positions_window_against_available_geometry() -> None:
     assert window.pos().x() == available.x() + available.width() - window.width() - 20
     assert window.pos().y() == available.y() + available.height() - window.height() - 20
     window.deleteLater()
+
+
+def test_disabled_window_placement_does_not_move_the_window() -> None:
+    _application()
+    window = QWidget()
+    window.resize(300, 180)
+    window.move(40, 60)
+    original_position = window.pos()
+    placement = WindowPlacement(
+        window,
+        title="Test Updater Window",
+        margin=20,
+        enabled=False,
+    )
+
+    placement.position_bottom_right()
+
+    assert window.pos() == original_position
+    placement.set_enabled(True)
+    assert placement.enabled
+    placement.set_enabled(False)
+    placement.position_bottom_right()
+    assert window.pos() == original_position
+    window.deleteLater()
