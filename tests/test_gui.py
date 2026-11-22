@@ -748,6 +748,49 @@ def test_minimal_window_shows_retry_actions_only_when_policy_allows_them(
     window.deleteLater()
 
 
+def test_retried_run_shown_after_close_is_repositioned_even_if_phase_is_unchanged(
+    tmp_path: Path,
+) -> None:
+    app = _application()
+    user_store = StateStore(tmp_path / "user.json")
+    user_store.save(UpdateState(phase="failed", run_id="failed-user-run"))
+    base_policy = load_policy()
+    policy = replace(
+        base_policy,
+        retry=replace(
+            base_policy.retry,
+            user_tools=replace(base_policy.retry.user_tools, user_manual_attempts=1),
+        ),
+    )
+    request_file = tmp_path / "user-request.json"
+    window = UpdaterWindow(policy, user_store, request_file, start_timer=False)
+    app.processEvents()
+    positions: list[bool] = []
+    window._placement.position_bottom_right = lambda: positions.append(True)
+
+    window.user_retry_button.click()
+    assert '"action":"retry"' in request_file.read_text(encoding="utf-8")
+    window.close_button.click()
+    assert not window.isVisible()
+
+    # The worker can consume the request and finish before the next GUI poll,
+    # leaving the phase as failed while assigning the retry a new run ID.
+    user_store.save(
+        UpdateState(
+            phase="failed",
+            run_id="retried-user-run",
+            manual_retries_used=1,
+            message="The manually retried update failed.",
+        )
+    )
+    window.refresh()
+    app.processEvents()
+
+    assert window.isVisible()
+    assert positions == [True]
+    window.deleteLater()
+
+
 def test_full_details_has_collapsible_task_sections_and_returns_after_completion(
     tmp_path: Path,
 ) -> None:

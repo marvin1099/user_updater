@@ -347,6 +347,7 @@ class UpdaterWindow(QWidget):
             QTimer.singleShot(0, self._position_window)
 
     def refresh(self) -> None:
+        was_visible = self.isVisible()
         try:
             user_state = self.state_store.load()
             system_state = self.system_state_store.load() if self.system_state_store else None
@@ -361,7 +362,7 @@ class UpdaterWindow(QWidget):
             if not self._full_mode and not self._status_error_dismissed:
                 self.show()
                 self._fit_height_to_contents()
-                if previous_phase != self._phase:
+                if not was_visible or previous_phase != self._phase:
                     QTimer.singleShot(0, self._position_window)
             return
 
@@ -468,7 +469,7 @@ class UpdaterWindow(QWidget):
             else:
                 self.show()
                 self._fit_height_to_contents()
-                if previous_phase != self._phase:
+                if not was_visible or previous_phase != self._phase:
                     QTimer.singleShot(0, self._position_window)
 
         if previous_phase != self._phase:
