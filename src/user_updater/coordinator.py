@@ -6,8 +6,9 @@ from datetime import datetime, timedelta
 from enum import StrEnum
 from uuid import uuid4
 
-from .policy import Policy, TaskRetryPolicy, check_deferral
+from .policy import Policy, TaskRetryPolicy
 from .requests import UserRequest
+from .rescheduling import available_reschedule_hours
 from .schedule import next_scheduled_after
 from .state import StateStore, UpdateState
 
@@ -32,12 +33,14 @@ class UpdateCoordinator:
         interval_hours: int | None = None,
         response_minutes: int | None = None,
         retry_policy: TaskRetryPolicy | None = None,
+        task_id: str = "user-tools",
     ) -> None:
         self.policy = policy
         self.state_store = state_store
         self.interval_hours = interval_hours
         self.response_minutes = response_minutes or policy.schedule.response_minutes
         self.retry_policy = retry_policy or policy.retry.user_tools
+        self.task_id = task_id
 
     def tick(
         self,
@@ -250,7 +253,14 @@ class UpdateCoordinator:
                 for request in matching
                 if request.action == "defer"
                 and request.hours is not None
-                and check_deferral(self.policy, request.hours, state.deferrals_used)
+                and not isinstance(request.hours, bool)
+                and request.hours
+                in available_reschedule_hours(
+                    self.policy,
+                    self.task_id,
+                    state.scheduled_for or state.next_scheduled_at,
+                    now,
+                )
             ),
             None,
         )
@@ -263,7 +273,7 @@ class UpdateCoordinator:
                     retry_group_id=state.retry_group_id or state.run_id,
                     automatic_retries_used=state.automatic_retries_used,
                     manual_retries_used=state.manual_retries_used,
-                    scheduled_for=state.scheduled_for,
+                    scheduled_for=state.scheduled_for or state.next_scheduled_at or now.isoformat(),
                     next_scheduled_at=state.next_scheduled_at,
                     deferred_until=deferred_until.isoformat(),
                     deferrals_used=state.deferrals_used + 1,
@@ -276,7 +286,7 @@ class UpdateCoordinator:
             )
             return TickAction.DEFERRED
 
-        if any(request.action == "start_now" for request in matching):
+        if self.task_id != "system" and any(request.action == "start_now" for request in matching):
             return self._start(state, now)
 
         if now < deadline:

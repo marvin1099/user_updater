@@ -89,7 +89,14 @@ def run_gui(system_mode: bool = False) -> int:
         full_window.refresh()
 
     window.full_mode_requested.connect(show_full_details)
-    window.admin_requested.connect(lambda: open_admin_settings(window, paths.policy, policy_saved))
+    window.admin_requested.connect(
+        lambda: open_admin_settings(
+            window,
+            paths.policy,
+            policy_saved,
+            on_reschedule_preview=window.show_reschedule_preview,
+        )
+    )
     window.system_retry_requested.connect(lambda: start_system_retry(window))
     full_window.system_retry_requested.connect(lambda: start_system_retry(full_window))
     full_window.back_requested.connect(return_to_minimal)

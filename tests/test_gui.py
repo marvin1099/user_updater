@@ -7,14 +7,14 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QApplication, QCheckBox, QLabel, QWidget
+from PySide6.QtWidgets import QApplication, QCheckBox, QLabel, QPushButton, QWidget
 
 from user_updater.gui import admin as admin_gui
 from user_updater.gui.admin import AdminSettingsDialog
 from user_updater.gui.full_window import FullDetailsWindow
 from user_updater.gui.window import UpdaterWindow
 from user_updater.history import RunHistoryStore, history_path_for_state
-from user_updater.policy import load_policy
+from user_updater.policy import load_policy, policy_to_mapping, validate_policy_data
 from user_updater.requests import task_request_path
 from user_updater.state import StateStore, UpdateState
 from user_updater.tool_preferences import UserToolPreferenceStore
@@ -57,6 +57,30 @@ def test_pending_window_offers_only_admin_allowed_reschedule_and_update_now(
     window.deleteLater()
 
 
+def test_user_reschedule_choices_shrink_to_fit_the_remaining_time(tmp_path: Path) -> None:
+    _application()
+    now = datetime.now().astimezone()
+    store = StateStore(tmp_path / "state.json")
+    store.save(
+        UpdateState(
+            phase="awaiting_response",
+            run_id="run-near-limit",
+            scheduled_for=(now - timedelta(hours=34)).isoformat(),
+            response_deadline=(now + timedelta(minutes=5)).isoformat(),
+        )
+    )
+    window = UpdaterWindow(load_policy(), store, tmp_path / "request.json", start_timer=False)
+
+    assert [
+        window.defer_choice.itemData(index) for index in range(window.defer_choice.count())
+    ] == [
+        1,
+        4,
+        13,
+    ]
+    window.deleteLater()
+
+
 def test_defer_button_writes_a_user_request_for_the_current_run(tmp_path: Path) -> None:
     _application()
     store = StateStore(tmp_path / "state.json")
@@ -70,6 +94,33 @@ def test_defer_button_writes_a_user_request_for_the_current_run(tmp_path: Path) 
 
     assert '"run_id":"run-42"' in request_file.read_text(encoding="utf-8")
     assert '"hours":4' in request_file.read_text(encoding="utf-8")
+    window.deleteLater()
+
+
+def test_system_rescheduling_preview_is_isolated_and_has_no_update_now(tmp_path: Path) -> None:
+    _application()
+    policy = load_policy()
+    user_store = StateStore(tmp_path / "user.json")
+    system_store = StateStore(tmp_path / "system.json")
+    window = UpdaterWindow(
+        policy,
+        user_store,
+        tmp_path / "user-request.json",
+        start_timer=False,
+        system_state_store=system_store,
+        system_request_file=tmp_path / "system-request.json",
+    )
+
+    window.show_reschedule_preview("system")
+    preview = window._reschedule_previews[-1]
+    buttons = {button.text(): button for button in preview.findChildren(QPushButton)}
+
+    assert preview.isVisible()
+    assert "Reschedule" in buttons
+    assert not buttons["Update now"].isVisible()
+    assert system_store.load().phase == "idle"
+    assert user_store.load().phase == "idle"
+    preview.close()
     window.deleteLater()
 
 
@@ -208,6 +259,7 @@ def test_admin_settings_dialog_builds_a_valid_policy_mapping(tmp_path: Path) -> 
     assert retry_note.wordWrap()
     assert "scripts" in dialog.allow_custom_tools.text().lower()
     assert dialog.allow_custom_tools.isChecked()
+    assert dialog.allow_custom_tools.parentWidget().title() == "Personal tools available to users"
     assert dialog.run_system_now_button.isEnabled()
     dialog.run_user_tools.setChecked(False)
     dialog.user_interval.setValue(12)
@@ -220,6 +272,10 @@ def test_admin_settings_dialog_builds_a_valid_policy_mapping(tmp_path: Path) -> 
     dialog.user_tools_user_retries.setValue(3)
     dialog.system_forced_failures.setValue(2)
     dialog.user_forced_successes.setValue(4)
+    dialog.allow_deferral.setChecked(False)
+    dialog.max_user_tools_deferral.setValue(36)
+    dialog.allow_system_deferral.setChecked(True)
+    dialog.max_system_deferral.setValue(18)
     assert not dialog.testing_section.is_expanded()
 
     dialog.show()
@@ -234,7 +290,7 @@ def test_admin_settings_dialog_builds_a_valid_policy_mapping(tmp_path: Path) -> 
     assert dialog.schedule_group.title() == "Update schedules"
     dialog.testing_section.header.click()
     assert dialog.testing_section.is_expanded()
-    assert "border:" in dialog.testing_section.styleSheet()
+    assert dialog.testing_section.styleSheet() == ""
 
     mapping = dialog.policy_mapping()
 
@@ -242,6 +298,13 @@ def test_admin_settings_dialog_builds_a_valid_policy_mapping(tmp_path: Path) -> 
     assert mapping["updates"]["allow_custom_user_tools"] is False
     assert "flatpak" not in mapping["updates"]["user_tools"]
     assert mapping["schedule"]["user_tools_interval_hours"] == 12
+    assert mapping["interaction"] == {
+        "allow_deferral": False,
+        "allow_system_deferral": True,
+        "deferral_options_hours": [1, 4, 24],
+        "max_user_tools_deferral_hours": 36,
+        "max_system_deferral_hours": 18,
+    }
     assert mapping["retry"]["system"] == {
         "automatic_attempts": 3,
         "delay_minutes": 20,
@@ -257,6 +320,23 @@ def test_admin_settings_dialog_builds_a_valid_policy_mapping(tmp_path: Path) -> 
     dialog.testing_section.header.click()
     assert not dialog.testing_section.is_expanded()
     assert dialog.testing_section.styleSheet() == ""
+    dialog.deleteLater()
+
+
+def test_testing_buttons_preview_unsaved_reschedule_policy() -> None:
+    _application()
+    dialog = AdminSettingsDialog(load_policy())
+    previews: list[tuple[str, object]] = []
+    dialog.reschedule_preview_requested.connect(
+        lambda task_id, policy: previews.append((task_id, policy))
+    )
+    dialog.max_user_tools_deferral.setValue(36)
+
+    dialog.preview_user_rescheduling_button.click()
+    dialog.preview_system_rescheduling_button.click()
+
+    assert [task_id for task_id, _policy in previews] == ["user-tools", "system"]
+    assert all(policy.interaction.max_user_tools_deferral_hours == 36 for _, policy in previews)
     dialog.deleteLater()
 
 
@@ -384,6 +464,7 @@ def test_system_window_keeps_system_and_user_responses_separate(tmp_path: Path) 
         UpdateState(
             phase="awaiting_response",
             run_id="system-run",
+            scheduled_for=now.isoformat(),
             response_deadline=(now + timedelta(minutes=5)).isoformat(),
         )
     )
@@ -394,8 +475,13 @@ def test_system_window_keeps_system_and_user_responses_separate(tmp_path: Path) 
             response_deadline=(now + timedelta(minutes=5)).isoformat(),
         )
     )
+    raw_policy = policy_to_mapping(load_policy())
+    raw_policy["schedule"]["days"] = [
+        ("mon", "tue", "wed", "thu", "fri", "sat", "sun")[(now.weekday() + 3) % 7]
+    ]
+    raw_policy["schedule"]["time"] = "23:59"
     window = UpdaterWindow(
-        load_policy(),
+        validate_policy_data(raw_policy),
         user_store,
         task_request_path(home, "user-tools"),
         start_timer=False,
@@ -404,12 +490,14 @@ def test_system_window_keeps_system_and_user_responses_separate(tmp_path: Path) 
     )
 
     assert window.system_panel.update_now_button.isHidden()
-    assert window.system_panel.defer_button.isHidden()
     window.system_panel.update_now_button.click()
+    window.system_panel.defer_choice.setCurrentIndex(0)
+    window.system_panel.defer_button.click()
     window.user_panel.defer_choice.setCurrentIndex(1)
     window.user_panel.defer_button.click()
 
-    assert not task_request_path(home, "system").exists()
+    assert '"run_id":"system-run"' in task_request_path(home, "system").read_text()
+    assert '"hours":1' in task_request_path(home, "system").read_text()
     assert '"run_id":"user-run"' in task_request_path(home, "user-tools").read_text()
     assert '"hours":4' in task_request_path(home, "user-tools").read_text()
     window.deleteLater()

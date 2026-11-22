@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+import tempfile
+from datetime import datetime, timedelta
 from pathlib import Path
+from uuid import uuid4
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QComboBox,
+    QDialog,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -17,6 +20,7 @@ from PySide6.QtWidgets import (
 
 from ..policy import Policy
 from ..requests import UserRequest, save_request
+from ..rescheduling import available_reschedule_hours
 from ..state import StateError, StateStore, UpdateState
 from .placement import WindowPlacement
 
@@ -32,12 +36,14 @@ class _TaskPanel(QWidget):
         request_file: Path,
         parent: QWidget | None = None,
         *,
-        allow_user_response: bool = True,
+        task_id: str = "user-tools",
+        allow_start_now: bool = True,
     ) -> None:
         super().__init__(parent)
         self.title = title
         self.policy = policy
-        self.allow_user_response = allow_user_response
+        self.task_id = task_id
+        self.allow_start_now = allow_start_now
         self.request_file = Path(request_file)
         self._state = UpdateState()
         self._request_sent = False
@@ -93,9 +99,9 @@ class _TaskPanel(QWidget):
         self.setVisible(show_panel)
         response_open = state.phase == "awaiting_response"
         self.countdown.setVisible(response_open)
-        self.defer_choice.setVisible(response_open and self.allow_user_response)
-        self.defer_button.setVisible(response_open and self.allow_user_response)
-        self.update_now_button.setVisible(response_open and self.allow_user_response)
+        self.defer_choice.hide()
+        self.defer_button.hide()
+        self.update_now_button.setVisible(response_open and self.allow_start_now)
         if response_open:
             remaining = _remaining_seconds(state.response_deadline)
             if remaining is None:
@@ -103,31 +109,40 @@ class _TaskPanel(QWidget):
             else:
                 minutes, seconds = divmod(remaining, 60)
                 self.countdown.setText(f"Automatic start in {minutes}:{seconds:02d}.")
-            allowed = self.allow_user_response and (
-                self.policy.interaction.allow_deferral
-                and state.deferrals_used < self.policy.interaction.max_deferrals_per_run
-                and bool(self.policy.interaction.deferral_options_hours)
-            )
+            selected_hours = self.defer_choice.currentData()
             self.defer_choice.clear()
-            for hours in self.policy.interaction.deferral_options_hours:
+            allowed_hours = available_reschedule_hours(
+                self.policy,
+                self.task_id,
+                state.scheduled_for or state.next_scheduled_at,
+                datetime.now().astimezone(),
+            )
+            for hours in allowed_hours:
                 self.defer_choice.addItem(_duration_label(hours), hours)
-            self.defer_choice.setVisible(allowed)
-            self.defer_button.setVisible(allowed)
+            if selected_hours in allowed_hours:
+                self.defer_choice.setCurrentIndex(allowed_hours.index(selected_hours))
+            self.defer_choice.setVisible(bool(allowed_hours))
+            self.defer_button.setVisible(bool(allowed_hours))
             for control in (self.defer_choice, self.defer_button, self.update_now_button):
                 control.setEnabled(not self._request_sent)
             if self._request_sent:
                 self.status.setText(f"{self.title}: response sent; waiting for the updater.")
 
     def _submit_defer(self) -> None:
-        if not self.allow_user_response:
-            return
         hours = self.defer_choice.currentData()
         if self._state.run_id is None or hours is None:
+            return
+        if int(hours) not in available_reschedule_hours(
+            self.policy,
+            self.task_id,
+            self._state.scheduled_for or self._state.next_scheduled_at,
+            datetime.now().astimezone(),
+        ):
             return
         self._save(UserRequest(self._state.run_id, "defer", int(hours)))
 
     def _submit_start_now(self) -> None:
-        if not self.allow_user_response:
+        if not self.allow_start_now:
             return
         if self._state.run_id is None:
             return
@@ -171,6 +186,7 @@ class UpdaterWindow(QWidget):
         self._status_error_dismissed = False
         self._system_retry_requested_for: str | None = None
         self._user_retry_requested_for: str | None = None
+        self._reschedule_previews: list[QDialog] = []
         self.setWindowTitle("User Updater Status")
         self._build_ui(request_file, system_request_file, admin_enabled)
         self._placement = WindowPlacement(self, title=self.windowTitle())
@@ -215,9 +231,16 @@ class UpdaterWindow(QWidget):
                 self.policy,
                 system_path,
                 self,
-                allow_user_response=False,
+                task_id="system",
+                allow_start_now=False,
             )
-        self.user_panel = _TaskPanel("Your user tools", self.policy, request_file, self)
+        self.user_panel = _TaskPanel(
+            "Your user tools",
+            self.policy,
+            request_file,
+            self,
+            task_id="user-tools",
+        )
 
         self.full_button = QPushButton("Full details")
         self.full_button.clicked.connect(self.full_mode_requested.emit)
@@ -280,6 +303,65 @@ class UpdaterWindow(QWidget):
         if self.system_panel is not None:
             self.system_panel.policy = policy
         self.refresh()
+
+    def show_reschedule_preview(self, task_id: str, policy: Policy | None = None) -> None:
+        """Show an isolated response prompt using the current, possibly unsaved, policy."""
+        if task_id not in {"system", "user-tools"}:
+            raise ValueError(f"unknown rescheduling preview task: {task_id}")
+        preview_policy = policy or self.policy
+        is_system = task_id == "system"
+        title = "System update" if is_system else "Your user tools"
+        response_minutes = (
+            preview_policy.schedule.response_minutes
+            if is_system
+            else preview_policy.schedule.user_tools_response_minutes
+        )
+        now = datetime.now().astimezone()
+
+        preview = QDialog(self, Qt.WindowType.Window)
+        preview.setWindowTitle(f"Rescheduling preview — {title}")
+        preview.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        temporary_directory = tempfile.TemporaryDirectory(prefix="user-updater-preview-")
+        request_file = Path(temporary_directory.name) / "request.json"
+        panel = _TaskPanel(
+            title,
+            preview_policy,
+            request_file,
+            preview,
+            task_id=task_id,
+            allow_start_now=not is_system,
+        )
+        panel.apply_state(
+            UpdateState(
+                phase="awaiting_response",
+                run_id=f"preview-{uuid4().hex}",
+                scheduled_for=now.isoformat(),
+                response_deadline=(now + timedelta(minutes=response_minutes)).isoformat(),
+                message="Preview only. No update will be started.",
+            )
+        )
+        explanation = QLabel(
+            "Preview only — this does not start an update or change saved updater state."
+        )
+        explanation.setWordWrap(True)
+        close_button = QPushButton("Close preview")
+        close_button.clicked.connect(preview.close)
+        layout = QVBoxLayout(preview)
+        layout.addWidget(explanation)
+        layout.addWidget(panel)
+        layout.addWidget(close_button)
+        preview._temporary_directory = temporary_directory
+        self._reschedule_previews.append(preview)
+
+        def cleanup_preview(_result: int) -> None:
+            temporary_directory.cleanup()
+            if preview in self._reschedule_previews:
+                self._reschedule_previews.remove(preview)
+
+        preview.finished.connect(cleanup_preview)
+        preview.show()
+        preview.raise_()
+        preview.activateWindow()
 
     def show_status(self) -> None:
         self._full_mode = False

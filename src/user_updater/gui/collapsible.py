@@ -22,14 +22,10 @@ class CollapsibleSection(QWidget):
         expanded: bool = False,
         header_inside: bool = True,
         checkbox_header: bool = False,
-        expanded_border: bool = False,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.header_inside = header_inside
-        self.expanded_border = expanded_border
-        if expanded_border:
-            self.setObjectName("testingSection")
         if checkbox_header:
             self.header = QCheckBox(title, self if header_inside else None)
         else:
@@ -49,10 +45,7 @@ class CollapsibleSection(QWidget):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         layout = QVBoxLayout(self)
-        if expanded_border:
-            layout.setContentsMargins(6, 5, 6, 6)
-        else:
-            layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(2)
         if header_inside:
             header_layout = QHBoxLayout()
@@ -82,9 +75,3 @@ class CollapsibleSection(QWidget):
         self.content.setVisible(expanded)
         if not self.header_inside:
             self.setVisible(expanded)
-        if self.expanded_border:
-            self.setStyleSheet(
-                "QWidget#testingSection { border: 1px solid #657180; border-radius: 5px; }"
-                if expanded
-                else ""
-            )

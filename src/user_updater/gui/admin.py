@@ -10,7 +10,7 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 
-from PySide6.QtCore import QProcess, Qt, QTime, QTimer
+from PySide6.QtCore import QProcess, Qt, QTime, QTimer, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -41,6 +41,8 @@ _TOOLS = ("flatpak", "pipx", "pip", "npm", "cargo", "gem")
 class AdminSettingsDialog(QDialog):
     """Edit the constrained administrator policy without running Qt as root."""
 
+    reschedule_preview_requested = Signal(str, object)
+
     def __init__(self, policy: Policy, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.policy = policy
@@ -57,14 +59,6 @@ class AdminSettingsDialog(QDialog):
         self.allow_custom_tools.setChecked(policy.updates.allow_custom_user_tools)
         form.addRow(self.run_system)
         form.addRow(self.run_user_tools)
-        form.addRow(self.allow_custom_tools)
-        scripts_note = QLabel(
-            "When enabled, executable scripts in each user's "
-            "~/.config/user_updater/tools.d directory run as that user during "
-            "personal-tool updates."
-        )
-        scripts_note.setWordWrap(True)
-        form.addRow(scripts_note)
 
         system_schedule = QGroupBox("System update schedule")
         system_form = QFormLayout(system_schedule)
@@ -139,39 +133,70 @@ class AdminSettingsDialog(QDialog):
         testing_form.addRow("Next user-tool updates to force-fail", self.user_forced_failures)
         testing_form.addRow("Next system updates to force-success", self.system_forced_successes)
         testing_form.addRow("Next user-tool updates to force-success", self.user_forced_successes)
+        self.preview_user_rescheduling_button = QPushButton("Preview personal-tool rescheduling")
+        self.preview_system_rescheduling_button = QPushButton("Preview system rescheduling")
+        self.preview_user_rescheduling_button.clicked.connect(
+            lambda: self._emit_reschedule_preview("user-tools")
+        )
+        self.preview_system_rescheduling_button.clicked.connect(
+            lambda: self._emit_reschedule_preview("system")
+        )
+        preview_buttons = QWidget(testing_content)
+        preview_buttons_layout = QHBoxLayout(preview_buttons)
+        preview_buttons_layout.setContentsMargins(0, 0, 0, 0)
+        preview_buttons_layout.addWidget(self.preview_user_rescheduling_button)
+        preview_buttons_layout.addWidget(self.preview_system_rescheduling_button)
+        testing_form.addRow("Preview response prompts", preview_buttons)
         testing_note = QLabel(
             "These one-shot simulations skip all update commands. Each active user's "
-            "tool-update attempt consumes one count. Forced failures are used before "
-            "forced successes for each task."
+            "tool-update attempt consumes one count. The prompt previews do not run an "
+            "update or change saved state."
         )
         testing_note.setWordWrap(True)
         testing_form.addRow(testing_note)
-        self.testing_section = CollapsibleSection(
-            "Testing", testing_content, expanded=False, expanded_border=True
-        )
+        self.testing_section = CollapsibleSection("Testing", testing_content, expanded=False)
         form.addRow(self.testing_section)
 
         interaction = QGroupBox("Rescheduling")
         interaction_form = QFormLayout(interaction)
         self.allow_deferral = QCheckBox("Allow users to reschedule personal-tool updates")
         self.allow_deferral.setChecked(policy.interaction.allow_deferral)
+        self.max_user_tools_deferral = _spin(
+            policy.interaction.max_user_tools_deferral_hours, 1, 168
+        )
+        self.allow_system_deferral = QCheckBox("Allow users to reschedule system updates")
+        self.allow_system_deferral.setChecked(policy.interaction.allow_system_deferral)
+        self.max_system_deferral = _spin(policy.interaction.max_system_deferral_hours, 1, 168)
         self.deferral_options = QLineEdit(
             ", ".join(str(value) for value in policy.interaction.deferral_options_hours)
         )
-        self.max_deferrals = _spin(policy.interaction.max_deferrals_per_run, 0, 10)
         interaction_form.addRow(self.allow_deferral)
+        interaction_form.addRow("Personal-tool time limit (hours)", self.max_user_tools_deferral)
+        interaction_form.addRow(self.allow_system_deferral)
+        interaction_form.addRow("System-update time limit (hours)", self.max_system_deferral)
         interaction_form.addRow("Allowed delays (hours)", self.deferral_options)
-        interaction_form.addRow("Maximum per scheduled run", self.max_deferrals)
         form.addRow(interaction)
 
         tools_group = QGroupBox("Personal tools available to users")
-        tools_layout = QHBoxLayout(tools_group)
+        tools_layout = QVBoxLayout(tools_group)
+        tools_widget = QWidget(tools_group)
+        tool_checks_layout = QHBoxLayout(tools_widget)
+        tool_checks_layout.setContentsMargins(0, 0, 0, 0)
         self.tool_checks: dict[str, QCheckBox] = {}
         for tool in _TOOLS:
             check = QCheckBox(tool)
             check.setChecked(tool in policy.updates.user_tools)
             self.tool_checks[tool] = check
-            tools_layout.addWidget(check)
+            tool_checks_layout.addWidget(check)
+        tools_layout.addWidget(tools_widget)
+        tools_layout.addWidget(self.allow_custom_tools)
+        scripts_note = QLabel(
+            "When enabled, executable scripts in each user's "
+            "~/.config/user_updater/tools.d directory run as that user during "
+            "personal-tool updates."
+        )
+        scripts_note.setWordWrap(True)
+        tools_layout.addWidget(scripts_note)
         form.addRow(tools_group)
         tools_note = QLabel(
             "This is the administrator allow-list. Users may turn off any listed tool "
@@ -246,8 +271,10 @@ class AdminSettingsDialog(QDialog):
             interaction=replace(
                 self.policy.interaction,
                 allow_deferral=self.allow_deferral.isChecked(),
+                allow_system_deferral=self.allow_system_deferral.isChecked(),
                 deferral_options_hours=options,
-                max_deferrals_per_run=self.max_deferrals.value(),
+                max_user_tools_deferral_hours=self.max_user_tools_deferral.value(),
+                max_system_deferral_hours=self.max_system_deferral.value(),
             ),
             updates=replace(
                 self.policy.updates,
@@ -299,11 +326,20 @@ class AdminSettingsDialog(QDialog):
             return
         self.accept()
 
+    def _emit_reschedule_preview(self, task_id: str) -> None:
+        try:
+            preview_policy = validate_policy_data(self.policy_mapping())
+        except PolicyError as exc:
+            QMessageBox.warning(self, "Invalid settings", str(exc))
+            return
+        self.reschedule_preview_requested.emit(task_id, preview_policy)
+
 
 def open_admin_settings(
     parent: QWidget,
     policy_file: Path,
     on_saved,
+    on_reschedule_preview=None,
 ) -> None:
     """Authenticate, then show a nonmodal settings dialog using the narrow root helper."""
     existing_dialog = getattr(parent, "_admin_settings_dialog", None)
@@ -339,6 +375,8 @@ def open_admin_settings(
         dialog.setWindowModality(Qt.WindowModality.NonModal)
         dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         parent._admin_settings_dialog = dialog
+        if on_reschedule_preview is not None:
+            dialog.reschedule_preview_requested.connect(on_reschedule_preview)
 
         def save_dialog_policy() -> None:
             try:

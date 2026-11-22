@@ -30,8 +30,10 @@ _DEFAULTS: dict[str, Any] = {
     },
     "interaction": {
         "allow_deferral": True,
+        "allow_system_deferral": True,
         "deferral_options_hours": [1, 4, 24],
-        "max_deferrals_per_run": 2,
+        "max_user_tools_deferral_hours": 48,
+        "max_system_deferral_hours": 24,
     },
     "updates": {
         "run_system": True,
@@ -76,8 +78,10 @@ class SchedulePolicy:
 @dataclass(frozen=True)
 class InteractionPolicy:
     allow_deferral: bool
+    allow_system_deferral: bool
     deferral_options_hours: tuple[int, ...]
-    max_deferrals_per_run: int
+    max_user_tools_deferral_hours: int
+    max_system_deferral_hours: int
 
 
 @dataclass(frozen=True)
@@ -151,6 +155,12 @@ def validate_policy_data(raw: Any) -> Policy:
         raw = {}
     if not isinstance(raw, dict):
         raise PolicyError("policy must be a YAML mapping")
+    raw = copy.deepcopy(raw)
+    interaction = raw.get("interaction")
+    if isinstance(interaction, dict):
+        # Older policy files limited the number of deferrals. Accept and discard
+        # this obsolete setting so existing installations migrate on next save.
+        interaction.pop("max_deferrals_per_run", None)
     merged = _merge_checked(_DEFAULTS, raw, "policy")
     return _make_policy(merged)
 
@@ -169,8 +179,10 @@ def policy_to_mapping(policy: Policy) -> dict[str, Any]:
         },
         "interaction": {
             "allow_deferral": policy.interaction.allow_deferral,
+            "allow_system_deferral": policy.interaction.allow_system_deferral,
             "deferral_options_hours": list(policy.interaction.deferral_options_hours),
-            "max_deferrals_per_run": policy.interaction.max_deferrals_per_run,
+            "max_user_tools_deferral_hours": (policy.interaction.max_user_tools_deferral_hours),
+            "max_system_deferral_hours": policy.interaction.max_system_deferral_hours,
         },
         "updates": {
             "run_system": policy.updates.run_system,
@@ -285,19 +297,6 @@ def _policy_lock(path: Path) -> Iterator[None]:
         os.close(descriptor)
 
 
-def check_deferral(policy: Policy, hours: int, deferrals_used: int) -> bool:
-    """Return whether an individual deferral request is allowed by admin policy."""
-    return (
-        policy.interaction.allow_deferral
-        and isinstance(hours, int)
-        and not isinstance(hours, bool)
-        and hours in policy.interaction.deferral_options_hours
-        and isinstance(deferrals_used, int)
-        and not isinstance(deferrals_used, bool)
-        and 0 <= deferrals_used < policy.interaction.max_deferrals_per_run
-    )
-
-
 def default_policy_text(user_mode: bool = False) -> str:
     """Render the bundled default policy for a system or user-only install."""
     defaults = copy.deepcopy(_DEFAULTS)
@@ -387,12 +386,21 @@ def _make_policy(raw: dict[str, Any]) -> Policy:
         raise PolicyError("interaction.deferral_options_hours must be unique")
     interaction = InteractionPolicy(
         allow_deferral=_boolean(interaction_raw["allow_deferral"], "interaction.allow_deferral"),
+        allow_system_deferral=_boolean(
+            interaction_raw["allow_system_deferral"], "interaction.allow_system_deferral"
+        ),
         deferral_options_hours=options,
-        max_deferrals_per_run=_integer(
-            interaction_raw["max_deferrals_per_run"],
-            "interaction.max_deferrals_per_run",
-            minimum=0,
-            maximum=10,
+        max_user_tools_deferral_hours=_integer(
+            interaction_raw["max_user_tools_deferral_hours"],
+            "interaction.max_user_tools_deferral_hours",
+            minimum=1,
+            maximum=168,
+        ),
+        max_system_deferral_hours=_integer(
+            interaction_raw["max_system_deferral_hours"],
+            "interaction.max_system_deferral_hours",
+            minimum=1,
+            maximum=168,
         ),
     )
 

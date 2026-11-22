@@ -69,6 +69,7 @@ class UpdateService:
             interval_hours=interval_hours,
             response_minutes=response_minutes,
             retry_policy=selected_retry_policy,
+            task_id=task_id,
         )
         self.workflow = workflow
         self.request_homes = request_homes or local_request_homes
@@ -141,7 +142,13 @@ class UpdateService:
                 action = self.coordinator.retry_failed(current)
                 return self._run_workflow(action)
         if state.phase == "awaiting_response":
-            requests = self._read_requests(state.run_id, accept=self.task_id != "system")
+            requests = self._read_requests(
+                state.run_id,
+                accept=(
+                    self.task_id != "system"
+                    or self.coordinator.policy.interaction.allow_system_deferral
+                ),
+            )
         else:
             requests = []
         action = self.coordinator.tick(current, requests)

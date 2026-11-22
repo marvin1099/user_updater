@@ -5,7 +5,12 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from user_updater.coordinator import TickAction, UpdateCoordinator
-from user_updater.policy import TaskRetryPolicy, load_policy
+from user_updater.policy import (
+    TaskRetryPolicy,
+    load_policy,
+    policy_to_mapping,
+    validate_policy_data,
+)
 from user_updater.requests import UserRequest
 from user_updater.state import StateStore, UpdateState
 
@@ -43,15 +48,38 @@ def test_allowed_deferral_reschedules_and_shows_another_response_window(tmp_path
     assert coordinator.tick(NOW + timedelta(hours=1, minutes=6)) is TickAction.RUN
 
 
-def test_unapproved_or_exhausted_deferral_does_not_postpone_the_update(tmp_path: Path) -> None:
+def test_rescheduling_can_be_repeated_until_the_time_limit(tmp_path: Path) -> None:
     store = _store_due_now(tmp_path)
+    coordinator = UpdateCoordinator(load_policy(), store)
+    coordinator.tick(NOW)
+
+    response_at = NOW + timedelta(minutes=1)
+    for deferrals in range(1, 4):
+        state = store.load()
+        assert (
+            coordinator.tick(
+                response_at,
+                [UserRequest(run_id=state.run_id or "", action="defer", hours=1)],
+            )
+            is TickAction.DEFERRED
+        )
+        assert store.load().deferrals_used == deferrals
+        resume_at = datetime.fromisoformat(store.load().deferred_until or "")
+        assert coordinator.tick(resume_at) is TickAction.WAITING_FOR_RESPONSE
+        response_at = resume_at + timedelta(minutes=1)
+
+
+def test_reschedule_is_rejected_when_the_maximum_time_window_is_exhausted(
+    tmp_path: Path,
+) -> None:
+    store = _store_due_now(tmp_path)
+    scheduled_for = NOW - timedelta(hours=47)
     store.save(
         UpdateState(
             phase="awaiting_response",
             run_id="scheduled-run",
-            scheduled_for=NOW.isoformat(),
+            scheduled_for=scheduled_for.isoformat(),
             response_deadline=(NOW + timedelta(minutes=5)).isoformat(),
-            deferrals_used=2,
         )
     )
     coordinator = UpdateCoordinator(load_policy(), store)
@@ -63,6 +91,71 @@ def test_unapproved_or_exhausted_deferral_does_not_postpone_the_update(tmp_path:
 
     assert action is TickAction.WAITING_FOR_RESPONSE
     assert store.load().phase == "awaiting_response"
+
+
+def test_boolean_is_not_treated_as_a_one_hour_reschedule(tmp_path: Path) -> None:
+    store = _store_due_now(tmp_path)
+    store.save(
+        UpdateState(
+            phase="awaiting_response",
+            run_id="scheduled-run",
+            scheduled_for=NOW.isoformat(),
+            response_deadline=(NOW + timedelta(minutes=5)).isoformat(),
+        )
+    )
+    coordinator = UpdateCoordinator(load_policy(), store)
+
+    action = coordinator.tick(
+        NOW + timedelta(minutes=1),
+        [UserRequest(run_id="scheduled-run", action="defer", hours=True)],
+    )
+
+    assert action is TickAction.WAITING_FOR_RESPONSE
+
+
+def test_system_reschedule_uses_system_policy_and_ignores_start_now(
+    tmp_path: Path,
+) -> None:
+    raw = policy_to_mapping(load_policy())
+    raw["schedule"]["days"] = ["sun"]
+    raw["schedule"]["time"] = "17:00"
+    policy = validate_policy_data(raw)
+    store = _store_due_now(tmp_path)
+    store.save(
+        UpdateState(
+            phase="awaiting_response",
+            run_id="system-run",
+            scheduled_for=NOW.isoformat(),
+            next_scheduled_at=NOW.isoformat(),
+            response_deadline=(NOW + timedelta(minutes=5)).isoformat(),
+        )
+    )
+    coordinator = UpdateCoordinator(policy, store, task_id="system")
+
+    assert (
+        coordinator.tick(
+            NOW + timedelta(minutes=1),
+            [UserRequest(run_id="system-run", action="defer", hours=13)],
+        )
+        is TickAction.DEFERRED
+    )
+    assert store.load().deferred_until == (NOW + timedelta(hours=13, minutes=1)).isoformat()
+
+    store.save(
+        UpdateState(
+            phase="awaiting_response",
+            run_id="system-start-now",
+            scheduled_for=NOW.isoformat(),
+            response_deadline=(NOW + timedelta(minutes=5)).isoformat(),
+        )
+    )
+    assert (
+        coordinator.tick(
+            NOW + timedelta(minutes=1),
+            [UserRequest(run_id="system-start-now", action="start_now")],
+        )
+        is TickAction.WAITING_FOR_RESPONSE
+    )
 
 
 def test_timely_response_is_honored_even_if_worker_polls_after_deadline(

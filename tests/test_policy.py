@@ -1,15 +1,18 @@
+from datetime import datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
 from user_updater.policy import (
     PolicyError,
-    check_deferral,
     consume_test_outcome,
     load_policy,
     policy_to_mapping,
+    validate_policy_data,
     write_policy,
 )
+from user_updater.rescheduling import available_reschedule_hours
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -23,7 +26,10 @@ def test_default_policy_matches_product_defaults() -> None:
     assert policy.schedule.user_tools_interval_hours == 24
     assert policy.schedule.user_tools_response_minutes == 5
     assert policy.interaction.allow_deferral is True
+    assert policy.interaction.allow_system_deferral is True
     assert policy.interaction.deferral_options_hours == (1, 4, 24)
+    assert policy.interaction.max_user_tools_deferral_hours == 48
+    assert policy.interaction.max_system_deferral_hours == 24
     assert policy.updates.run_system is True
     assert "flatpak" in policy.updates.user_tools
     assert policy.updates.allow_custom_user_tools is True
@@ -106,26 +112,25 @@ interaction:
     policy = load_policy(config)
 
     assert policy.schedule.response_minutes == 8
-    assert check_deferral(policy, hours=1, deferrals_used=0) is False
+    now = datetime(2026, 11, 15, 3, 0, tzinfo=ZoneInfo("UTC"))
+    assert available_reschedule_hours(policy, "user-tools", now.isoformat(), now) == ()
 
 
 @pytest.mark.parametrize(
-    ("hours", "deferrals_used", "expected"),
-    [
-        (1, 0, True),
-        (4, 1, True),
-        (2, 0, False),
-        (24, 2, False),
-    ],
+    ("elapsed_hours", "expected"),
+    [(0, (1, 4, 24)), (34, (1, 4, 13)), (47, ()), (48, ())],
 )
-def test_deferral_is_limited_by_admin_options_and_count(
-    hours: int,
-    deferrals_used: int,
-    expected: bool,
+def test_user_reschedule_options_shrink_with_remaining_time(
+    elapsed_hours: int,
+    expected: tuple[int, ...],
 ) -> None:
     policy = load_policy(PROJECT_ROOT / "project.yaml")
+    scheduled_for = datetime(2026, 11, 15, 3, 0, tzinfo=ZoneInfo("UTC"))
+    now = scheduled_for + timedelta(hours=elapsed_hours)
 
-    assert check_deferral(policy, hours, deferrals_used) is expected
+    assert (
+        available_reschedule_hours(policy, "user-tools", scheduled_for.isoformat(), now) == expected
+    )
 
 
 def test_unknown_admin_policy_keys_are_rejected(tmp_path: Path) -> None:
@@ -146,10 +151,27 @@ interaction:
         load_policy(config)
 
 
-def test_boolean_is_not_accepted_as_an_integer_deferral() -> None:
+def test_system_reschedule_is_capped_before_the_next_system_schedule() -> None:
     policy = load_policy(PROJECT_ROOT / "project.yaml")
+    raw = policy_to_mapping(policy)
+    raw["schedule"]["days"] = ["sun"]
+    raw["schedule"]["time"] = "17:00"
+    policy = validate_policy_data(raw)
+    scheduled_for = datetime(2026, 11, 15, 3, 0, tzinfo=ZoneInfo("UTC"))
 
-    assert check_deferral(policy, hours=True, deferrals_used=0) is False
+    assert available_reschedule_hours(
+        policy, "system", scheduled_for.isoformat(), scheduled_for
+    ) == (1, 4, 13)
+
+
+def test_legacy_deferral_count_is_ignored_and_removed_when_saved(tmp_path: Path) -> None:
+    config = tmp_path / "project.yaml"
+    config.write_text("version: 1\ninteraction:\n  max_deferrals_per_run: 0\n", encoding="utf-8")
+
+    policy = load_policy(config)
+
+    assert policy.interaction.max_user_tools_deferral_hours == 48
+    assert "max_deferrals_per_run" not in policy_to_mapping(policy)["interaction"]
 
 
 def test_admin_policy_write_validates_and_round_trips_atomically(tmp_path: Path) -> None:

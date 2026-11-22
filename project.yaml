@@ -11,9 +11,12 @@ schedule:
   check_interval_minutes: 1
 
 interaction:
+  # Controls rescheduling; the same delay choices are bounded by elapsed time.
   allow_deferral: true
+  allow_system_deferral: true
   deferral_options_hours: [1, 4, 24]
-  max_deferrals_per_run: 2
+  max_user_tools_deferral_hours: 48
+  max_system_deferral_hours: 24
 
 updates:
   run_system: true

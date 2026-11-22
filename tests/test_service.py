@@ -7,7 +7,12 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from user_updater.history import RunHistoryStore
-from user_updater.policy import TaskRetryPolicy, load_policy
+from user_updater.policy import (
+    TaskRetryPolicy,
+    load_policy,
+    policy_to_mapping,
+    validate_policy_data,
+)
 from user_updater.requests import UserRequest, request_path, save_request, task_request_path
 from user_updater.service import RequestHome, UpdateService
 from user_updater.state import StateStore, UpdateState
@@ -87,6 +92,38 @@ def test_service_reads_valid_user_deferral_then_runs_after_response_window(
     assert workflow.calls == 1
     assert state_store.load().phase == "succeeded"
     assert "fake topgrade completed" in state_store.load().last_output
+
+
+def test_system_service_reads_user_reschedule_requests(tmp_path: Path) -> None:
+    policy = load_policy()
+    state_store = StateStore(tmp_path / "system-state.json")
+    state_store.save(UpdateState(next_scheduled_at=NOW.isoformat()))
+    user_home = tmp_path / "alice"
+    user_home.mkdir()
+    service = UpdateService(
+        policy,
+        state_store,
+        FakeWorkflow(),
+        request_homes=lambda: [RequestHome(user_home, os.getuid())],
+        task_id="system",
+    )
+
+    service.tick(NOW)
+    run_id = state_store.load().run_id
+    save_request(
+        task_request_path(user_home, "system"),
+        UserRequest(
+            run_id or "",
+            "defer",
+            1,
+            submitted_at=(NOW + timedelta(minutes=1)).isoformat(),
+        ),
+    )
+
+    service.tick(NOW + timedelta(minutes=1))
+
+    assert state_store.load().phase == "deferred"
+    assert state_store.load().deferred_until == (NOW + timedelta(hours=1, minutes=1)).isoformat()
 
 
 def test_worker_lock_prevents_a_second_manual_or_scheduled_run(tmp_path: Path) -> None:
@@ -451,8 +488,10 @@ def test_service_records_a_run_summary_after_completion(tmp_path: Path) -> None:
     assert records[0].message == "Updates completed."
 
 
-def test_system_task_ignores_user_response_requests(tmp_path: Path) -> None:
-    policy = load_policy()
+def test_system_task_ignores_reschedules_when_disabled_by_policy(tmp_path: Path) -> None:
+    raw_policy = policy_to_mapping(load_policy())
+    raw_policy["interaction"]["allow_system_deferral"] = False
+    policy = validate_policy_data(raw_policy)
     user_home = tmp_path / "alice"
     user_home.mkdir()
     state_store = StateStore(tmp_path / "system-state.json")
