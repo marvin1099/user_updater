@@ -215,6 +215,20 @@ def test_admin_settings_dialog_builds_a_valid_policy_mapping(tmp_path: Path) -> 
     dialog.user_forced_successes.setValue(4)
     assert not dialog.testing_section.is_expanded()
 
+    dialog.show()
+    _application().processEvents()
+    day_rows = {
+        day: dialog.day_checks[day].geometry().y()
+        for day in ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+    }
+    assert len({day_rows[day] for day in ("mon", "tue", "wed", "thu")}) == 1
+    assert len({day_rows[day] for day in ("fri", "sat", "sun")}) == 1
+    assert day_rows["fri"] > day_rows["mon"]
+    assert dialog.schedule_group.title() == "Update schedules"
+    dialog.testing_section.header.click()
+    assert dialog.testing_section.is_expanded()
+    assert "border:" in dialog.testing_section.styleSheet()
+
     mapping = dialog.policy_mapping()
 
     assert mapping["updates"]["run_user_tools"] is False
@@ -232,6 +246,10 @@ def test_admin_settings_dialog_builds_a_valid_policy_mapping(tmp_path: Path) -> 
         "system": {"fail_next": 2, "succeed_next": 0},
         "user_tools": {"fail_next": 0, "succeed_next": 4},
     }
+    assert dialog.testing_section.header.x() < dialog.testing_section.width() / 2
+    dialog.testing_section.header.click()
+    assert not dialog.testing_section.is_expanded()
+    assert dialog.testing_section.styleSheet() == ""
     dialog.deleteLater()
 
 
@@ -556,6 +574,10 @@ def test_full_details_has_collapsible_task_sections_and_returns_after_completion
     assert window.system_section.is_expanded()
     assert window.user_section.is_expanded()
     assert not window.history_section.is_expanded()
+    assert window.system_section.header.isVisible()
+    assert window.user_section.header.isVisible()
+    assert window.history_section.header.isVisible()
+    assert abs(window.system_section.height() - window.user_section.height()) <= 12
     assert window.system_tab.terminal.isReadOnly()
     assert window.user_tab.terminal.isReadOnly()
     system_output = window.system_tab.terminal.toPlainText().splitlines()
@@ -576,6 +598,30 @@ def test_full_details_has_collapsible_task_sections_and_returns_after_completion
     window.reset_section_expansion()
     assert not window.system_section.is_expanded()
     assert window.history_section.is_expanded()
+    window.deleteLater()
+
+
+def test_details_single_open_section_uses_available_height(tmp_path: Path) -> None:
+    app = _application()
+    system_store = StateStore(tmp_path / "system.json")
+    user_store = StateStore(tmp_path / "user.json")
+    system_store.save(UpdateState(phase="running", run_id="system-run"))
+    user_store.save(UpdateState(phase="succeeded", run_id="user-run"))
+    window = FullDetailsWindow(system_store, user_store)
+    window.show()
+    app.processEvents()
+
+    assert window.system_section.is_expanded()
+    assert not window.user_section.is_expanded()
+    assert not window.history_section.is_expanded()
+    assert window.system_section.height() > 450
+
+    window.user_section.header.click()
+    app.processEvents()
+    assert window.system_section.is_expanded()
+    assert window.user_section.is_expanded()
+    assert abs(window.system_section.height() - window.user_section.height()) <= 12
+
     window.deleteLater()
 
 

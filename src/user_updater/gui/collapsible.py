@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QHBoxLayout, QToolButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QSizePolicy, QToolButton, QVBoxLayout, QWidget
 
 
 class CollapsibleSection(QWidget):
@@ -13,24 +13,41 @@ class CollapsibleSection(QWidget):
         content: QWidget,
         *,
         expanded: bool = False,
+        header_inside: bool = True,
+        expanded_border: bool = False,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self.header = QToolButton(self)
+        self.header_inside = header_inside
+        self.expanded_border = expanded_border
+        if expanded_border:
+            self.setObjectName("testingSection")
+        self.header = QToolButton(self if header_inside else None)
         self.header.setObjectName("sectionHeader")
         self.header.setText(title)
         self.header.setCheckable(True)
-        self.header.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.header.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+            if header_inside
+            else Qt.ToolButtonStyle.ToolButtonTextOnly
+        )
+        self.header.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.content = content
         self.content.setParent(self)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
-        header_layout = QHBoxLayout()
-        header_layout.setContentsMargins(0, 0, 0, 0)
-        header_layout.addWidget(self.header)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        if expanded_border:
+            layout.setContentsMargins(6, 5, 6, 6)
+        else:
+            layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(2)
-        layout.addLayout(header_layout)
+        if header_inside:
+            header_layout = QHBoxLayout()
+            header_layout.setContentsMargins(0, 0, 0, 0)
+            header_layout.addWidget(self.header, alignment=Qt.AlignmentFlag.AlignLeft)
+            header_layout.addStretch(1)
+            layout.addLayout(header_layout)
         layout.addWidget(self.content)
 
         self.header.toggled.connect(self._sync_expanded)
@@ -44,5 +61,18 @@ class CollapsibleSection(QWidget):
         self._sync_expanded(expanded)
 
     def _sync_expanded(self, expanded: bool) -> None:
-        self.header.setArrowType(Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow)
+        if self.header_inside:
+            self.header.setArrowType(
+                Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow
+            )
+        else:
+            self.header.setArrowType(Qt.ArrowType.NoArrow)
         self.content.setVisible(expanded)
+        if not self.header_inside:
+            self.setVisible(expanded)
+        if self.expanded_border:
+            self.setStyleSheet(
+                "QWidget#testingSection { border: 1px solid #657180; border-radius: 5px; }"
+                if expanded
+                else ""
+            )

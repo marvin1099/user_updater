@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFormLayout,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -69,20 +70,22 @@ class AdminSettingsDialog(QDialog):
         system_form = QFormLayout(system_schedule)
         self.day_checks: dict[str, QCheckBox] = {}
         days_widget = QWidget()
-        days_layout = QHBoxLayout(days_widget)
+        days_layout = QGridLayout(days_widget)
         days_layout.setContentsMargins(0, 0, 0, 0)
-        for day in _DAYS:
+        days_layout.setHorizontalSpacing(14)
+        days_layout.setVerticalSpacing(2)
+        for index, day in enumerate(_DAYS):
             check = QCheckBox(day.title())
             check.setChecked(day in policy.schedule.days)
             self.day_checks[day] = check
-            days_layout.addWidget(check)
+            row, column = divmod(index, 4)
+            days_layout.addWidget(check, row, column)
         self.system_time = QTimeEdit(QTime.fromString(policy.schedule.time, "HH:mm"))
         self.system_time.setDisplayFormat("HH:mm")
         self.system_response = _spin(policy.schedule.response_minutes, 1, 60)
         system_form.addRow("Days", days_widget)
         system_form.addRow("Local start time", self.system_time)
         system_form.addRow("Response window (minutes)", self.system_response)
-        form.addRow(system_schedule)
 
         user_schedule = QGroupBox("Personal user-tool schedule")
         user_form = QFormLayout(user_schedule)
@@ -90,7 +93,12 @@ class AdminSettingsDialog(QDialog):
         self.user_response = _spin(policy.schedule.user_tools_response_minutes, 1, 60)
         user_form.addRow("Repeat interval (hours)", self.user_interval)
         user_form.addRow("Response window (minutes)", self.user_response)
-        form.addRow(user_schedule)
+
+        self.schedule_group = QGroupBox("Update schedules")
+        schedules_layout = QVBoxLayout(self.schedule_group)
+        schedules_layout.addWidget(system_schedule)
+        schedules_layout.addWidget(user_schedule)
+        form.addRow(self.schedule_group)
 
         retry_group = QGroupBox("Retry behavior")
         retry_layout = QVBoxLayout(retry_group)
@@ -138,7 +146,9 @@ class AdminSettingsDialog(QDialog):
         )
         testing_note.setWordWrap(True)
         testing_form.addRow(testing_note)
-        self.testing_section = CollapsibleSection("Testing", testing_content, expanded=False)
+        self.testing_section = CollapsibleSection(
+            "Testing", testing_content, expanded=False, expanded_border=True
+        )
         form.addRow(self.testing_section)
 
         interaction = QGroupBox("Rescheduling")

@@ -16,7 +16,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QPlainTextEdit,
     QPushButton,
-    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -205,9 +204,18 @@ class FullDetailsWindow(QWidget):
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.Tool
         )
-        self.resize(840, 560)
-        self.setMinimumSize(640, 420)
-        self.setStyleSheet("QWidget { background: #20242b; color: #f2f4f8; }")
+        self.resize(840, 680)
+        self.setMinimumSize(640, 500)
+        self.setStyleSheet(
+            "QWidget { background: #20242b; color: #f2f4f8; }"
+            "QToolButton#detailsSectionToggle {"
+            "padding: 7px 12px; border: 1px solid #48515d; border-radius: 4px;"
+            "background: #292e36;"
+            "}"
+            "QToolButton#detailsSectionToggle:checked {"
+            "background: #36536d; border-color: #79a9d6;"
+            "}"
+        )
         self._placement = WindowPlacement(
             self,
             title=self.windowTitle(),
@@ -222,21 +230,28 @@ class FullDetailsWindow(QWidget):
         self.history_view.setObjectName("runHistory")
         self.history_view.setReadOnly(True)
         self.history_view.setPlaceholderText("No completed update runs recorded.")
-        self.system_section = CollapsibleSection("System updates", self.system_tab)
-        self.user_section = CollapsibleSection("User tools", self.user_tab)
-        self.history_section = CollapsibleSection("Run history", self.history_view)
-        sections_widget = QWidget()
-        sections_layout = QVBoxLayout(sections_widget)
+        self.system_section = CollapsibleSection(
+            "System updates", self.system_tab, header_inside=False
+        )
+        self.user_section = CollapsibleSection("User tools", self.user_tab, header_inside=False)
+        self.history_section = CollapsibleSection(
+            "Run history", self.history_view, header_inside=False
+        )
+        for section in (self.system_section, self.user_section, self.history_section):
+            section.header.setObjectName("detailsSectionToggle")
+        section_tabs = QHBoxLayout()
+        section_tabs.setContentsMargins(0, 0, 0, 0)
+        section_tabs.setSpacing(4)
+        section_tabs.addWidget(self.system_section.header)
+        section_tabs.addWidget(self.user_section.header)
+        section_tabs.addWidget(self.history_section.header)
+        section_tabs.addStretch(1)
+        sections_layout = QVBoxLayout()
         sections_layout.setContentsMargins(0, 0, 0, 0)
         sections_layout.setSpacing(6)
-        sections_layout.addWidget(self.system_section)
-        sections_layout.addWidget(self.user_section)
-        sections_layout.addWidget(self.history_section)
-        sections_layout.addStretch(1)
-        scroll = QScrollArea()
-        scroll.setObjectName("detailsScrollArea")
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(sections_widget)
+        sections_layout.addWidget(self.system_section, stretch=1)
+        sections_layout.addWidget(self.user_section, stretch=1)
+        sections_layout.addWidget(self.history_section, stretch=1)
         self.system_tab.retry_button.clicked.connect(self.system_retry_requested.emit)
         self.user_tab.retry_button.clicked.connect(self._submit_user_retry)
         self.user_tab.save_tools_button.clicked.connect(self._save_user_tool_preferences)
@@ -247,7 +262,8 @@ class FullDetailsWindow(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 12, 14, 12)
         layout.addWidget(title)
-        layout.addWidget(scroll, stretch=1)
+        layout.addLayout(section_tabs)
+        layout.addLayout(sections_layout, stretch=1)
         controls = QHBoxLayout()
         controls.addStretch(1)
         controls.addWidget(self.back_button)
