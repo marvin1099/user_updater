@@ -360,16 +360,49 @@ def test_scheduled_prompt_waits_for_response_before_running_updates(tmp_path: Pa
     assert store.load().phase == "succeeded"
 
 
-def test_scheduled_prompt_does_not_replace_an_active_task(tmp_path: Path) -> None:
+def test_scheduled_prompt_replaces_a_deferred_task_with_a_fresh_response_window(
+    tmp_path: Path,
+) -> None:
     store = StateStore(tmp_path / "system.json")
-    store.save(UpdateState(phase="awaiting_response", run_id="existing"))
+    store.save(
+        UpdateState(
+            phase="deferred",
+            run_id="existing",
+            scheduled_for=(NOW - timedelta(hours=1)).isoformat(),
+            deferred_until=(NOW + timedelta(hours=2)).isoformat(),
+        )
+    )
+    workflow = FakeWorkflow()
+    service = UpdateService(
+        load_policy(),
+        store,
+        workflow,
+        task_id="system",
+        response_minutes=2,
+        clock=lambda: NOW,
+    )
+
+    action = service.schedule_prompt_now(NOW)
+
+    scheduled = store.load()
+    assert action.value == "waiting_for_response"
+    assert scheduled.phase == "awaiting_response"
+    assert scheduled.run_id != "existing"
+    assert scheduled.scheduled_for == NOW.isoformat()
+    assert scheduled.response_deadline == (NOW + timedelta(minutes=2)).isoformat()
+    assert workflow.calls == 0
+
+
+def test_scheduled_prompt_does_not_replace_a_running_task(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "system.json")
+    store.save(UpdateState(phase="running", run_id="running-task"))
     workflow = FakeWorkflow()
     service = UpdateService(load_policy(), store, workflow, task_id="system")
 
     with pytest.raises(ValueError, match="cannot schedule another update"):
         service.schedule_prompt_now(NOW)
 
-    assert store.load().run_id == "existing"
+    assert store.load().run_id == "running-task"
     assert workflow.calls == 0
 
 

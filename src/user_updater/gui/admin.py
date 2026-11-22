@@ -137,11 +137,12 @@ class AdminSettingsDialog(QDialog):
         self.schedule_system_prompt_button = QPushButton("Schedule system update now")
         self.schedule_user_prompt_button.setToolTip(
             "Create a real personal-tool update prompt for each active desktop user. "
-            "Updates start after the response window unless a permitted delay is confirmed."
+            "This replaces any existing postponement. Updates start after the response window "
+            "unless a permitted delay is confirmed."
         )
         self.schedule_system_prompt_button.setToolTip(
             "Create a real system-update prompt. Updates start after the response window "
-            "unless a permitted delay is confirmed."
+            "unless a permitted delay is confirmed. This replaces any existing postponement."
         )
         self.schedule_user_prompt_button.setEnabled(policy.updates.run_user_tools)
         self.schedule_system_prompt_button.setEnabled(policy.updates.run_system)
@@ -164,8 +165,8 @@ class AdminSettingsDialog(QDialog):
             "Save a forced success/failure outcome before scheduling a test; it skips update "
             "commands when the run starts. Without one, this schedules a real due update: it "
             "appears in the compact updater and starts when its response window ends unless a "
-            "permitted delay is confirmed. Personal-tool prompts are scheduled for all active "
-            "desktop users."
+            "permitted delay is confirmed, replacing any previous postponement. Personal-tool "
+            "prompts are scheduled for all active desktop users."
         )
         testing_note.setWordWrap(True)
         testing_form.addRow(testing_note)

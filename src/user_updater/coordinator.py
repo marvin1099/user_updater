@@ -169,9 +169,9 @@ class UpdateCoordinator:
             "An administrator scheduled an update. It will start after the response window."
         ),
     ) -> TickAction:
-        """Create a due update prompt without bypassing its response window."""
+        """Schedule a fresh due prompt, replacing a prompt or deferral but not a running task."""
         state = self.state_store.load()
-        if state.phase in {"awaiting_response", "deferred", "running"}:
+        if state.phase == "running":
             raise ValueError(f"cannot schedule another update while this task is {state.phase}")
 
         run_id = uuid4().hex
