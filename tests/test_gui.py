@@ -101,6 +101,32 @@ def test_defer_button_writes_a_user_request_for_the_current_run(tmp_path: Path) 
     window.deleteLater()
 
 
+def test_response_refresh_does_not_rebuild_or_reset_reschedule_choice(tmp_path: Path) -> None:
+    _application()
+    store = StateStore(tmp_path / "state.json")
+    store.save(
+        UpdateState(
+            phase="awaiting_response",
+            run_id="stable-prompt",
+            scheduled_for=datetime.now().astimezone().isoformat(),
+            response_deadline=(datetime.now().astimezone() + timedelta(minutes=5)).isoformat(),
+        )
+    )
+    window = UpdaterWindow(load_policy(), store, tmp_path / "request.json", start_timer=False)
+    window.defer_choice.setCurrentIndex(1)
+    selected = window.defer_choice.currentData()
+    changed_indices: list[int] = []
+    window.defer_choice.currentIndexChanged.connect(changed_indices.append)
+
+    for _ in range(3):
+        window.refresh()
+
+    assert window.defer_choice.currentData() == selected
+    assert changed_indices == []
+    assert window.defer_choice.isVisible()
+    window.deleteLater()
+
+
 def test_compact_confirmation_can_start_personal_tools_now(tmp_path: Path) -> None:
     _application()
     store = StateStore(tmp_path / "state.json")

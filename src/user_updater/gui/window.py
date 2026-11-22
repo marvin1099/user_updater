@@ -25,6 +25,12 @@ _DISMISSIBLE_PHASES = frozenset({"awaiting_response", "running", "deferred", "su
 _TERMINAL_PHASES = frozenset({"succeeded", "failed"})
 
 
+def _set_widget_visible(widget: QWidget, visible: bool) -> None:
+    """Change explicit visibility only when needed, avoiding focus churn on refresh."""
+    if widget.isHidden() == visible:
+        widget.setVisible(visible)
+
+
 class _TaskPanel(QWidget):
     def __init__(
         self,
@@ -94,10 +100,7 @@ class _TaskPanel(QWidget):
         show_panel = state.phase != "idle" or bool(state.last_output)
         self.setVisible(show_panel)
         response_open = state.phase == "awaiting_response"
-        self.countdown.setVisible(response_open)
-        self.run_label.hide()
-        self.defer_choice.hide()
-        self.defer_button.hide()
+        _set_widget_visible(self.countdown, response_open)
         if response_open:
             remaining = _remaining_seconds(state.response_deadline)
             if remaining is None:
@@ -105,31 +108,51 @@ class _TaskPanel(QWidget):
             else:
                 minutes, seconds = divmod(remaining, 60)
                 self.countdown.setText(f"Autostarts in: {minutes}:{seconds:02d}")
-            selected = self.defer_choice.currentData()
-            self.defer_choice.clear()
             allowed_hours = available_reschedule_hours(
                 self.policy,
                 self.task_id,
                 state.scheduled_for or state.next_scheduled_at,
                 datetime.now().astimezone(),
             )
-            for hours in allowed_hours:
-                self.defer_choice.addItem(_duration_label(hours), hours)
+            options = [(_duration_label(hours), hours) for hours in allowed_hours]
             if self.allow_start_now:
-                self.defer_choice.addItem("now", "now")
-            if selected is not None and self.defer_choice.findData(selected) >= 0:
-                self.defer_choice.setCurrentIndex(self.defer_choice.findData(selected))
-            elif allowed_hours:
-                self.defer_choice.setCurrentIndex(0)
+                options.append(("now", "now"))
+            existing_options = [
+                (self.defer_choice.itemText(index), self.defer_choice.itemData(index))
+                for index in range(self.defer_choice.count())
+            ]
+            if options != existing_options:
+                selected = self.defer_choice.currentData()
+                had_focus = self.defer_choice.hasFocus()
+                signals_were_blocked = self.defer_choice.blockSignals(True)
+                try:
+                    self.defer_choice.clear()
+                    for label, value in options:
+                        self.defer_choice.addItem(label, value)
+                    selected_index = self.defer_choice.findData(selected)
+                    if selected_index >= 0:
+                        self.defer_choice.setCurrentIndex(selected_index)
+                    elif self.defer_choice.count():
+                        self.defer_choice.setCurrentIndex(0)
+                finally:
+                    self.defer_choice.blockSignals(signals_were_blocked)
+                self._update_run_label(self.defer_choice.currentIndex())
+                if had_focus:
+                    self.defer_choice.setFocus(Qt.FocusReason.OtherFocusReason)
+
             can_confirm = self.defer_choice.count() > 0
-            self.run_label.setVisible(can_confirm)
-            self.defer_choice.setVisible(can_confirm)
-            self.defer_button.setVisible(can_confirm)
+            _set_widget_visible(self.run_label, can_confirm)
+            _set_widget_visible(self.defer_choice, can_confirm)
+            _set_widget_visible(self.defer_button, can_confirm)
             for control in (self.defer_choice, self.defer_button):
                 control.setEnabled(not self._request_sent)
             self.status.setText(f"{self.title}: Waiting")
             if self._request_sent:
                 self.status.setText(f"{self.title}: response sent; waiting for the updater.")
+        else:
+            _set_widget_visible(self.run_label, False)
+            _set_widget_visible(self.defer_choice, False)
+            _set_widget_visible(self.defer_button, False)
 
     def _submit_defer(self) -> None:
         selection = self.defer_choice.currentData()
