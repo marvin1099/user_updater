@@ -127,6 +127,26 @@ def test_response_refresh_does_not_rebuild_or_reset_reschedule_choice(tmp_path: 
     window.deleteLater()
 
 
+def test_running_elapsed_timer_is_anchored_to_the_right_of_status(tmp_path: Path) -> None:
+    _application()
+    store = StateStore(tmp_path / "state.json")
+    store.save(
+        UpdateState(
+            phase="running",
+            run_id="running-task",
+            started_at=datetime.now().astimezone().isoformat(),
+        )
+    )
+    window = UpdaterWindow(load_policy(), store, tmp_path / "request.json", start_timer=False)
+    status_row = window.user_panel.layout().itemAt(0).layout()
+
+    status_index = status_row.indexOf(window.user_panel.status)
+    elapsed_index = status_row.indexOf(window.user_panel.elapsed)
+    assert status_index < elapsed_index
+    assert status_row.stretch(status_index) == 1
+    window.deleteLater()
+
+
 def test_compact_confirmation_can_start_personal_tools_now(tmp_path: Path) -> None:
     _application()
     store = StateStore(tmp_path / "state.json")
@@ -599,7 +619,7 @@ def test_minimal_terminal_status_rows_are_packed_tightly(tmp_path: Path) -> None
     window.deleteLater()
 
 
-def test_minimal_window_shows_elapsed_timers_left_of_running_tasks(tmp_path: Path) -> None:
+def test_minimal_window_shows_elapsed_timers_right_of_running_tasks(tmp_path: Path) -> None:
     app = _application()
     system_store = StateStore(tmp_path / "system.json")
     user_store = StateStore(tmp_path / "user.json")
@@ -621,7 +641,7 @@ def test_minimal_window_shows_elapsed_timers_left_of_running_tasks(tmp_path: Pat
         assert not panel.elapsed.isHidden()
         hours, minutes, seconds = (int(value) for value in panel.elapsed.text().split(":"))
         assert hours * 3600 + minutes * 60 + seconds >= 89
-        assert panel.elapsed.x() < panel.status.x()
+        assert panel.elapsed.x() > panel.status.x()
     window.deleteLater()
 
 
