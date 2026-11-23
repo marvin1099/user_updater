@@ -32,6 +32,10 @@ def test_default_policy_matches_product_defaults() -> None:
     assert policy.interaction.max_system_deferral_hours == 24
     assert policy.updates.run_system is True
     assert policy.window.automatic_positioning is True
+    assert policy.system_scripts.before.builder is False
+    assert policy.system_scripts.before.root is False
+    assert policy.system_scripts.after.builder is False
+    assert policy.system_scripts.after.root is False
     assert "flatpak" in policy.updates.user_tools
     assert policy.updates.allow_custom_user_tools is True
     assert policy.retry.system.automatic_attempts == 2
@@ -51,6 +55,32 @@ def test_automatic_window_positioning_defaults_on_and_can_be_disabled() -> None:
     updated = validate_policy_data(raw)
     assert updated.window.automatic_positioning is False
     assert policy_to_mapping(updated)["window"]["automatic_positioning"] is False
+
+
+def test_system_script_hooks_default_off_and_round_trip_independently() -> None:
+    raw = policy_to_mapping(load_policy())
+    assert raw["system_scripts"] == {
+        "before": {"builder": False, "root": False},
+        "after": {"builder": False, "root": False},
+    }
+    raw["system_scripts"]["before"]["builder"] = True
+    raw["system_scripts"]["after"]["root"] = True
+
+    updated = validate_policy_data(raw)
+
+    assert updated.system_scripts.before.builder is True
+    assert updated.system_scripts.before.root is False
+    assert updated.system_scripts.after.builder is False
+    assert updated.system_scripts.after.root is True
+    assert policy_to_mapping(updated)["system_scripts"] == raw["system_scripts"]
+
+
+def test_system_script_hook_settings_require_boolean_values() -> None:
+    raw = policy_to_mapping(load_policy())
+    raw["system_scripts"]["after"]["root"] = 1
+
+    with pytest.raises(PolicyError, match="system_scripts.after.root"):
+        validate_policy_data(raw)
 
 
 def test_administrator_can_configure_automatic_and_user_retry_limits(tmp_path: Path) -> None:

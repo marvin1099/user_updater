@@ -223,6 +223,7 @@ def _tick(system_mode: bool) -> int:
             builder_manager=builder,
             session_detector=lambda: [],
             test_outcome=lambda: consume_test_outcome(paths.policy, "system"),
+            script_root=paths.policy.parent / "scripts",
         )
         jobs.append(
             (
@@ -385,6 +386,7 @@ def _retry(system_mode: bool) -> int:
         builder_manager=builder,
         session_detector=lambda: [],
         test_outcome=lambda: consume_test_outcome(paths.policy, "system"),
+        script_root=paths.policy.parent / "scripts",
     )
     service = UpdateService(
         system_policy,
@@ -430,6 +432,7 @@ def _run_system_now(system_mode: bool) -> int:
         builder_manager=builder,
         session_detector=lambda: [],
         test_outcome=lambda: consume_test_outcome(paths.policy, "system"),
+        script_root=paths.policy.parent / "scripts",
     )
     service = UpdateService(
         system_policy,
@@ -541,6 +544,7 @@ def _schedule_prompt(task_id: str, system_mode: bool) -> int:
             builder_manager=builder,
             session_detector=lambda: [],
             test_outcome=lambda: consume_test_outcome(paths.policy, "system"),
+            script_root=paths.policy.parent / "scripts",
         )
         service = UpdateService(
             system_policy,

@@ -6,10 +6,12 @@ import os
 import shutil
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 from .accounts import BuilderAccount, BuilderAccountManager
 from .policy import Policy
 from .runner import CommandResult, run_command
+from .script_hooks import hook_scripts
 from .sessions import DesktopUser, detect_graphical_users
 from .user_tools import ToolResult, UserToolUpdater
 
@@ -40,6 +42,8 @@ class UpdateWorkflow:
         session_detector: Callable[[], list[DesktopUser]] = detect_graphical_users,
         user_tool_updater: UserToolUpdater | None = None,
         test_outcome: TestOutcome | None = None,
+        script_root: Path = Path("/etc/user-updater/scripts"),
+        script_owner_uid: int = 0,
     ) -> None:
         self.policy = policy
         self.builder_manager = builder_manager
@@ -48,6 +52,8 @@ class UpdateWorkflow:
         self.session_detector = session_detector
         self.user_tool_updater = user_tool_updater or UserToolUpdater(runner, which)
         self.test_outcome = test_outcome
+        self.script_root = Path(script_root)
+        self.script_owner_uid = script_owner_uid
 
     def run(
         self,
@@ -139,25 +145,77 @@ class UpdateWorkflow:
                 garuda_mode = self.builder_manager.package_manager == "/usr/bin/garuda-update"
                 self._write_topgrade_config(account, use_paru=garuda_mode)
                 environment = _builder_environment(account)
-                if garuda_mode:
-                    result = self._run_garuda_update(
-                        on_output,
-                        on_idle,
-                        on_progress,
-                        on_progress_end,
-                    )
-                if not garuda_mode or result.returncode == 0:
-                    result = self._run_topgrade(
+                before_root = self._run_hook_group(
+                    "before",
+                    "root",
+                    account,
+                    environment,
+                    on_output,
+                    on_idle,
+                    on_progress,
+                    on_progress_end,
+                )
+                before_builder = CommandResult(0, 0.0, False, ())
+                if before_root.returncode == 0:
+                    before_builder = self._run_hook_group(
+                        "before",
+                        "builder",
                         account,
-                        executable,
                         environment,
                         on_output,
                         on_idle,
                         on_progress,
                         on_progress_end,
-                        # The disposable Garuda builder needs no cache cleanup.
-                        cleanup=not garuda_mode,
                     )
+
+                if before_root.returncode != 0 or before_builder.returncode != 0:
+                    result = (
+                        before_root if before_root.returncode != 0 else before_builder
+                    )
+                    on_output("A before-update script failed; skipping the system update.")
+                else:
+                    if garuda_mode:
+                        result = self._run_garuda_update(
+                            on_output,
+                            on_idle,
+                            on_progress,
+                            on_progress_end,
+                        )
+                    if not garuda_mode or result.returncode == 0:
+                        result = self._run_topgrade(
+                            account,
+                            executable,
+                            environment,
+                            on_output,
+                            on_idle,
+                            on_progress,
+                            on_progress_end,
+                            # The disposable Garuda builder needs no cache cleanup.
+                            cleanup=not garuda_mode,
+                        )
+
+                    after_builder = self._run_hook_group(
+                        "after",
+                        "builder",
+                        account,
+                        environment,
+                        on_output,
+                        on_idle,
+                        on_progress,
+                        on_progress_end,
+                    )
+                    result = _keep_first_failure(result, after_builder)
+                    after_root = self._run_hook_group(
+                        "after",
+                        "root",
+                        account,
+                        environment,
+                        on_output,
+                        on_idle,
+                        on_progress,
+                        on_progress_end,
+                    )
+                    result = _keep_first_failure(result, after_root)
                 if result.returncode != 0:
                     on_output(f"System update command exited with status {result.returncode}.")
         except (OSError, RuntimeError, ValueError) as exc:
@@ -177,6 +235,62 @@ class UpdateWorkflow:
                         output_tail=result.output_tail,
                     )
         return result
+
+    def _run_hook_group(
+        self,
+        phase: str,
+        context: str,
+        account: BuilderAccount,
+        builder_environment: dict[str, str],
+        on_output: Output,
+        on_idle: Callable[[float], None] | None,
+        on_progress: Progress | None,
+        on_progress_end: ProgressEnd | None,
+    ) -> CommandResult:
+        if not getattr(getattr(self.policy.system_scripts, phase), context):
+            return CommandResult(0, 0.0, False, ())
+
+        scripts = hook_scripts(
+            self.script_root,
+            phase,
+            context,
+            owner_uid=self.script_owner_uid,
+        )
+        for script in scripts:
+            on_output(f"Running {phase} system script as {context}: {script.name}")
+            options: dict[str, object] = {
+                "on_output": on_output,
+                "on_idle": on_idle,
+            }
+            if on_progress is not None:
+                options["on_progress"] = on_progress
+            if on_progress_end is not None:
+                options["on_progress_end"] = on_progress_end
+            if context == "builder":
+                options.update(
+                    {
+                        "env": builder_environment,
+                        "cwd": account.home,
+                        "user_id": account.uid,
+                        "group_id": account.gid,
+                        "extra_group_ids": account.supplementary_group_ids,
+                    }
+                )
+            else:
+                options.update(
+                    {
+                        "env": _root_script_environment(),
+                        "cwd": Path("/"),
+                    }
+                )
+            result = self.runner([str(script)], **options)
+            if result.returncode != 0:
+                on_output(
+                    f"{phase.title()} system script {script.name} failed with status "
+                    f"{result.returncode}."
+                )
+                return result
+        return CommandResult(0, 0.0, False, ())
 
     def _run_garuda_update(
         self,
@@ -265,3 +379,25 @@ def _builder_environment(account: BuilderAccount) -> dict[str, str]:
         "LANG": "C.UTF-8",
         "TMPDIR": "/tmp",
     }
+
+
+def _root_script_environment() -> dict[str, str]:
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "HOME": "/root",
+            "USER": "root",
+            "LOGNAME": "root",
+            "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        }
+    )
+    return environment
+
+
+def _keep_first_failure(
+    result: CommandResult,
+    hook_result: CommandResult,
+) -> CommandResult:
+    if result.returncode == 0 and hook_result.returncode != 0:
+        return hook_result
+    return result

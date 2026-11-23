@@ -336,8 +336,16 @@ def test_admin_settings_dialog_builds_a_valid_policy_mapping(tmp_path: Path) -> 
     assert dialog.allow_custom_tools.isChecked()
     assert dialog.allow_custom_tools.parentWidget().title() == "Personal tools available to users"
     assert dialog.automatic_window_positioning.isChecked()
+    assert not dialog.before_builder_scripts.isChecked()
+    assert not dialog.before_root_scripts.isChecked()
+    assert not dialog.after_builder_scripts.isChecked()
+    assert not dialog.after_root_scripts.isChecked()
     assert dialog.run_system_now_button.isEnabled()
     dialog.automatic_window_positioning.setChecked(False)
+    dialog.before_builder_scripts.setChecked(True)
+    dialog.before_root_scripts.setChecked(True)
+    dialog.after_builder_scripts.setChecked(True)
+    dialog.after_root_scripts.setChecked(True)
     dialog.run_user_tools.setChecked(False)
     dialog.user_interval.setValue(12)
     dialog.allow_custom_tools.setChecked(False)
@@ -375,6 +383,10 @@ def test_admin_settings_dialog_builds_a_valid_policy_mapping(tmp_path: Path) -> 
     assert mapping["updates"]["allow_custom_user_tools"] is False
     assert "flatpak" not in mapping["updates"]["user_tools"]
     assert mapping["window"]["automatic_positioning"] is False
+    assert mapping["system_scripts"] == {
+        "before": {"builder": True, "root": True},
+        "after": {"builder": True, "root": True},
+    }
     assert mapping["schedule"]["user_tools_interval_hours"] == 12
     assert mapping["interaction"] == {
         "allow_deferral": False,

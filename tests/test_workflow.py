@@ -7,6 +7,7 @@ import pytest
 from user_updater.accounts import BuilderAccount
 from user_updater.policy import load_policy
 from user_updater.runner import CommandResult
+from user_updater.script_hooks import ensure_hook_directories
 from user_updater.workflow import UpdateWorkflow
 
 
@@ -88,6 +89,170 @@ def test_topgrade_runs_as_the_temporary_builder_and_is_cleaned(tmp_path: Path) -
     assert progress_ends == [None]
     assert manager.removed == [manager.account]
     assert "Packages updated" in output
+
+
+def test_system_hooks_run_in_order_as_the_selected_identity(tmp_path: Path) -> None:
+    config = tmp_path / "project.yaml"
+    config.write_text(
+        """
+version: 1
+updates:
+  run_user_tools: false
+system_scripts:
+  before:
+    root: true
+    builder: true
+  after:
+    builder: true
+    root: true
+""",
+        encoding="utf-8",
+    )
+    manager = FakeBuilderManager(tmp_path / "builders")
+    script_root = tmp_path / "etc" / "user-updater" / "scripts"
+    script_root.parent.mkdir(parents=True)
+    ensure_hook_directories(script_root, owner_uid=os.getuid())
+    scripts = (
+        script_root / "before" / "root.d" / "root-before",
+        script_root / "before" / "builder.d" / "builder-before",
+        script_root / "after" / "builder.d" / "builder-after",
+        script_root / "after" / "root.d" / "root-after",
+    )
+    for script in scripts:
+        script.write_text("#!/bin/sh\n", encoding="utf-8")
+        script.chmod(0o755)
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def runner(command: list[str], **kwargs: object) -> CommandResult:
+        calls.append((command, kwargs))
+        return CommandResult(0, 0.1, False, ())
+
+    workflow = UpdateWorkflow(
+        policy=load_policy(config),
+        builder_manager=manager,
+        runner=runner,
+        which=lambda name, path=None: "/usr/bin/topgrade" if name == "topgrade" else None,
+        session_detector=lambda: [],
+        script_root=script_root,
+        script_owner_uid=os.getuid(),
+    )
+
+    result = workflow.run(lambda _line: None)
+
+    assert result.returncode == 0
+    assert [command for command, _kwargs in calls] == [
+        [str(scripts[0])],
+        [str(scripts[1])],
+        ["/usr/bin/topgrade", "--notify-end", "never", "--cleanup", "--no-retry"],
+        [str(scripts[2])],
+        [str(scripts[3])],
+    ]
+    for index in (0, 4):
+        assert "user_id" not in calls[index][1]
+        assert calls[index][1]["env"]["USER"] == "root"
+        assert calls[index][1]["cwd"] == Path("/")
+    for index in (1, 3):
+        assert calls[index][1]["user_id"] == manager.account.uid
+        assert calls[index][1]["group_id"] == manager.account.gid
+        assert calls[index][1]["extra_group_ids"] == (937,)
+        assert calls[index][1]["cwd"] == manager.account.home
+
+
+def test_failed_before_hook_skips_topgrade_and_after_hooks(tmp_path: Path) -> None:
+    config = tmp_path / "project.yaml"
+    config.write_text(
+        """
+version: 1
+updates:
+  run_user_tools: false
+system_scripts:
+  before:
+    root: true
+  after:
+    root: true
+""",
+        encoding="utf-8",
+    )
+    manager = FakeBuilderManager(tmp_path / "builders")
+    script_root = tmp_path / "etc" / "user-updater" / "scripts"
+    script_root.parent.mkdir(parents=True)
+    ensure_hook_directories(script_root, owner_uid=os.getuid())
+    root_before = script_root / "before" / "root.d" / "fail"
+    root_after = script_root / "after" / "root.d" / "should-not-run"
+    for script in (root_before, root_after):
+        script.write_text("#!/bin/sh\n", encoding="utf-8")
+        script.chmod(0o755)
+    calls: list[list[str]] = []
+
+    def runner(command: list[str], **_kwargs: object) -> CommandResult:
+        calls.append(command)
+        return CommandResult(2, 0.1, False, ())
+
+    workflow = UpdateWorkflow(
+        policy=load_policy(config),
+        builder_manager=manager,
+        runner=runner,
+        which=lambda name, path=None: "/usr/bin/topgrade" if name == "topgrade" else None,
+        session_detector=lambda: [],
+        script_root=script_root,
+        script_owner_uid=os.getuid(),
+    )
+    output: list[str] = []
+
+    result = workflow.run(output.append)
+
+    assert result.returncode != 0
+    assert result.system_result is not None
+    assert result.system_result.returncode == 2
+    assert calls == [[str(root_before)]]
+    assert any("skipping the system update" in line for line in output)
+    assert manager.removed == [manager.account]
+
+
+def test_after_hook_runs_after_topgrade_failure_and_preserves_failure(tmp_path: Path) -> None:
+    config = tmp_path / "project.yaml"
+    config.write_text(
+        """
+version: 1
+updates:
+  run_user_tools: false
+system_scripts:
+  after:
+    root: true
+""",
+        encoding="utf-8",
+    )
+    manager = FakeBuilderManager(tmp_path / "builders")
+    script_root = tmp_path / "etc" / "user-updater" / "scripts"
+    script_root.parent.mkdir(parents=True)
+    ensure_hook_directories(script_root, owner_uid=os.getuid())
+    root_after = script_root / "after" / "root.d" / "cleanup"
+    root_after.write_text("#!/bin/sh\n", encoding="utf-8")
+    root_after.chmod(0o755)
+    calls: list[list[str]] = []
+
+    def runner(command: list[str], **_kwargs: object) -> CommandResult:
+        calls.append(command)
+        code = 1 if command[0] == "/usr/bin/topgrade" else 0
+        return CommandResult(code, 0.1, False, ())
+
+    workflow = UpdateWorkflow(
+        policy=load_policy(config),
+        builder_manager=manager,
+        runner=runner,
+        which=lambda name, path=None: "/usr/bin/topgrade" if name == "topgrade" else None,
+        session_detector=lambda: [],
+        script_root=script_root,
+        script_owner_uid=os.getuid(),
+    )
+
+    result = workflow.run(lambda _line: None)
+
+    assert result.returncode != 0
+    assert calls == [
+        ["/usr/bin/topgrade", "--notify-end", "never", "--cleanup", "--no-retry"],
+        [str(root_after)],
+    ]
 
 
 def test_garuda_uses_full_topgrade_without_a_custom_paru_command(tmp_path: Path) -> None:

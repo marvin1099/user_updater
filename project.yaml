@@ -46,5 +46,14 @@ window:
   # Let the desktop compositor or window rules place windows when disabled.
   automatic_positioning: true
 
+system_scripts:
+  # Only executable scripts in matching /etc/user-updater/scripts directories run.
+  before:
+    builder: false
+    root: false
+  after:
+    builder: false
+    root: false
+
 security:
   builder_sudo_mode: package-manager

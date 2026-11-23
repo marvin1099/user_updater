@@ -14,6 +14,7 @@ from xml.sax.saxutils import escape
 
 from .paths import migrate_legacy_directory, migrate_user_data_dirs
 from .policy import default_policy_text, load_policy
+from .script_hooks import ensure_hook_directories
 
 
 class SystemdAdapter(Protocol):
@@ -94,6 +95,7 @@ class SystemInstaller:
         if legacy_state_dir is not None:
             migrate_legacy_directory(legacy_state_dir, paths.state_dir)
         paths.policy_file.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+        ensure_hook_directories(paths.policy_file.parent / "scripts")
         paths.state_dir.mkdir(mode=0o755, parents=True, exist_ok=True)
         paths.state_dir.chmod(0o755)
         (paths.state_dir / "users").mkdir(mode=0o755, exist_ok=True)

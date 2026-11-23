@@ -238,6 +238,56 @@ class AdminSettingsDialog(QDialog):
         window_layout.addWidget(window_note)
         form.addRow(window_group)
 
+        scripts_group = QGroupBox("System update script hooks")
+        scripts_layout = QVBoxLayout(scripts_group)
+        before_group = QGroupBox("Before system update")
+        before_layout = QVBoxLayout(before_group)
+        self.before_builder_scripts = QCheckBox("Run scripts as the temporary builder")
+        self.before_builder_scripts.setObjectName("beforeBuilderScripts")
+        self.before_builder_scripts.setChecked(policy.system_scripts.before.builder)
+        self.before_builder_scripts.setToolTip(
+            "Run root-owned scripts in /etc/user-updater/scripts/before/builder.d/ "
+            "as the temporary updater account."
+        )
+        self.before_root_scripts = QCheckBox("Run scripts as root")
+        self.before_root_scripts.setObjectName("beforeRootScripts")
+        self.before_root_scripts.setChecked(policy.system_scripts.before.root)
+        self.before_root_scripts.setToolTip(
+            "Run root-owned scripts in /etc/user-updater/scripts/before/root.d/ as root."
+        )
+        before_layout.addWidget(self.before_builder_scripts)
+        before_layout.addWidget(self.before_root_scripts)
+        after_group = QGroupBox("After the system update")
+        after_layout = QVBoxLayout(after_group)
+        self.after_builder_scripts = QCheckBox("Run scripts as the temporary builder")
+        self.after_builder_scripts.setObjectName("afterBuilderScripts")
+        self.after_builder_scripts.setChecked(policy.system_scripts.after.builder)
+        self.after_builder_scripts.setToolTip(
+            "Run root-owned scripts in /etc/user-updater/scripts/after/builder.d/ "
+            "as the temporary updater account."
+        )
+        self.after_root_scripts = QCheckBox("Run scripts as root")
+        self.after_root_scripts.setObjectName("afterRootScripts")
+        self.after_root_scripts.setChecked(policy.system_scripts.after.root)
+        self.after_root_scripts.setToolTip(
+            "Run root-owned scripts in /etc/user-updater/scripts/after/root.d/ as root."
+        )
+        after_layout.addWidget(self.after_builder_scripts)
+        after_layout.addWidget(self.after_root_scripts)
+        scripts_layout.addWidget(before_group)
+        scripts_layout.addWidget(after_group)
+        scripts_note = QLabel(
+            "Only executable, root-owned scripts that are not writable by other users run, "
+            "in filename order. Order: root-before, builder-before, update, builder-after, "
+            "root-after. A failing before script skips the update; after scripts run when the "
+            "update attempt finishes. Root hooks execute with full root privileges."
+        )
+        scripts_note.setWordWrap(True)
+        scripts_layout.addWidget(scripts_note)
+        scripts_group.setEnabled(policy.updates.run_system)
+        self.run_system.toggled.connect(scripts_group.setEnabled)
+        form.addRow(scripts_group)
+
         retry_group = QGroupBox("Retry behavior")
         retry_layout = QVBoxLayout(retry_group)
         retry_note = QLabel(
@@ -481,6 +531,19 @@ class AdminSettingsDialog(QDialog):
             window=replace(
                 self.policy.window,
                 automatic_positioning=self.automatic_window_positioning.isChecked(),
+            ),
+            system_scripts=replace(
+                self.policy.system_scripts,
+                before=replace(
+                    self.policy.system_scripts.before,
+                    builder=self.before_builder_scripts.isChecked(),
+                    root=self.before_root_scripts.isChecked(),
+                ),
+                after=replace(
+                    self.policy.system_scripts.after,
+                    builder=self.after_builder_scripts.isChecked(),
+                    root=self.after_root_scripts.isChecked(),
+                ),
             ),
             security=replace(
                 self.policy.security,

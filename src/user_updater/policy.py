@@ -58,6 +58,10 @@ _DEFAULTS: dict[str, Any] = {
         "user_tools": {"fail_next": 0, "succeed_next": 0},
     },
     "window": {"automatic_positioning": True},
+    "system_scripts": {
+        "before": {"builder": False, "root": False},
+        "after": {"builder": False, "root": False},
+    },
     "security": {"builder_sudo_mode": "package-manager"},
 }
 
@@ -129,6 +133,18 @@ class WindowPolicy:
 
 
 @dataclass(frozen=True)
+class ScriptPhasePolicy:
+    builder: bool
+    root: bool
+
+
+@dataclass(frozen=True)
+class SystemScriptsPolicy:
+    before: ScriptPhasePolicy
+    after: ScriptPhasePolicy
+
+
+@dataclass(frozen=True)
 class Policy:
     version: int
     schedule: SchedulePolicy
@@ -137,6 +153,7 @@ class Policy:
     retry: RetryPolicy
     testing: TestingPolicy
     window: WindowPolicy
+    system_scripts: SystemScriptsPolicy
     security: SecurityPolicy
 
 
@@ -213,6 +230,13 @@ def policy_to_mapping(policy: Policy) -> dict[str, Any]:
             for task in ("system", "user_tools")
         },
         "window": {"automatic_positioning": policy.window.automatic_positioning},
+        "system_scripts": {
+            phase: {
+                "builder": getattr(policy.system_scripts, phase).builder,
+                "root": getattr(policy.system_scripts, phase).root,
+            }
+            for phase in ("before", "after")
+        },
         "security": {"builder_sudo_mode": policy.security.builder_sudo_mode},
     }
 
@@ -447,6 +471,20 @@ def _make_policy(raw: dict[str, Any]) -> Policy:
         )
     )
 
+    scripts_raw = raw["system_scripts"]
+    system_scripts = SystemScriptsPolicy(
+        before=ScriptPhasePolicy(
+            builder=_boolean(
+                scripts_raw["before"]["builder"], "system_scripts.before.builder"
+            ),
+            root=_boolean(scripts_raw["before"]["root"], "system_scripts.before.root"),
+        ),
+        after=ScriptPhasePolicy(
+            builder=_boolean(scripts_raw["after"]["builder"], "system_scripts.after.builder"),
+            root=_boolean(scripts_raw["after"]["root"], "system_scripts.after.root"),
+        ),
+    )
+
     security_raw = raw["security"]
     sudo_mode = security_raw["builder_sudo_mode"]
     if sudo_mode not in _SUDO_MODES:
@@ -461,6 +499,7 @@ def _make_policy(raw: dict[str, Any]) -> Policy:
         retry=retry,
         testing=testing,
         window=window,
+        system_scripts=system_scripts,
         security=security,
     )
 

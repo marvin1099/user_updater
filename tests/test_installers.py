@@ -72,6 +72,9 @@ def test_system_install_creates_admin_policy_service_timer_and_global_autostart(
     assert policy.updates.run_system is True
     assert (paths.state_dir / "users").is_dir()
     assert (paths.state_dir / "locks").is_dir()
+    for phase in ("before", "after"):
+        for context in ("builder", "root"):
+            assert (paths.policy_file.parent / "scripts" / phase / f"{context}.d").is_dir()
     assert paths.log_file.parent.is_dir()
     assert paths.log_file.parent.stat().st_mode & 0o777 == 0o755
     assert systemd.calls[-1] == ["enable", "--now", "user-updater.timer"]
