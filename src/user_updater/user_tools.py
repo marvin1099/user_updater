@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import stat
@@ -166,11 +167,10 @@ class UserToolUpdater:
             [python, "-m", "pip", "list", "--user", "--outdated", "--format=json"],
             on_output=on_output,
             on_idle=on_idle,
-            user_id=user.uid,
-            group_id=user.gid,
             env=env,
             cwd=user.home,
             tail_lines=10_000,
+            **_user_privilege_options(user),
             **_progress_options(on_progress),
             **_progress_end_options(on_progress_end),
         )
@@ -188,10 +188,9 @@ class UserToolUpdater:
                 [python, "-m", "pip", "install", "--user", "--upgrade", package],
                 on_output=on_output,
                 on_idle=on_idle,
-                user_id=user.uid,
-                group_id=user.gid,
                 env=env,
                 cwd=user.home,
+                **_user_privilege_options(user),
                 **_progress_options(on_progress),
                 **_progress_end_options(on_progress_end),
             )
@@ -218,10 +217,9 @@ class UserToolUpdater:
             [npm, "config", "get", "prefix"],
             on_output=on_output,
             on_idle=on_idle,
-            user_id=user.uid,
-            group_id=user.gid,
             env=env,
             cwd=user.home,
+            **_user_privilege_options(user),
             **_progress_options(on_progress),
             **_progress_end_options(on_progress_end),
         )
@@ -257,10 +255,9 @@ class UserToolUpdater:
             [cargo, "install-update", "-V"],
             on_output=on_output,
             on_idle=on_idle,
-            user_id=user.uid,
-            group_id=user.gid,
             env=env,
             cwd=user.home,
+            **_user_privilege_options(user),
             **_progress_options(on_progress),
             **_progress_end_options(on_progress_end),
         )
@@ -292,10 +289,9 @@ class UserToolUpdater:
             command,
             on_output=on_output,
             on_idle=on_idle,
-            user_id=user.uid,
-            group_id=user.gid,
             env=env,
             cwd=user.home,
+            **_user_privilege_options(user),
             **_progress_options(on_progress),
             **_progress_end_options(on_progress_end),
         )
@@ -328,6 +324,13 @@ def _user_environment(user: DesktopUser) -> dict[str, str]:
         if bus.exists():
             env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path={bus}"
     return env
+
+
+def _user_privilege_options(user: DesktopUser) -> dict[str, int]:
+    """Drop privileges only when the worker is not already the target user."""
+    if os.geteuid() == user.uid:
+        return {}
+    return {"user_id": user.uid, "group_id": user.gid}
 
 
 def _progress_options(on_progress: Progress | None) -> dict[str, Progress]:

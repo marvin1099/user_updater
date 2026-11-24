@@ -102,10 +102,15 @@ class UpdateService:
         current = now or self.clock()
         return self._with_worker_lock(lambda: self._retry_failed_locked(current))
 
-    def run_now(self, now: datetime | None = None) -> TickAction:
-        """Start a fresh update immediately; callers enforce administrator authorization."""
+    def run_now(
+        self,
+        now: datetime | None = None,
+        *,
+        message: str | None = None,
+    ) -> TickAction:
+        """Start a fresh update immediately; callers enforce the relevant authorization."""
         current = now or self.clock()
-        return self._with_worker_lock(lambda: self._run_now_locked(current))
+        return self._with_worker_lock(lambda: self._run_now_locked(current, message))
 
     def schedule_prompt_now(self, now: datetime | None = None) -> TickAction:
         """Schedule a fresh due prompt without running updates before its response window."""
@@ -138,7 +143,7 @@ class UpdateService:
                 return TickAction.WAITING_FOR_INTERNET
 
             action = self.coordinator.schedule_prompt_now(current)
-            self.on_log("An administrator scheduled an update prompt.")
+            self.on_log(self.state_store.load().message)
             return action
 
         return self._with_worker_lock(schedule)
@@ -160,7 +165,7 @@ class UpdateService:
         finally:
             os.close(descriptor)
 
-    def _run_now_locked(self, now: datetime) -> TickAction:
+    def _run_now_locked(self, now: datetime, message: str | None = None) -> TickAction:
         current_state = self.state_store.load()
         if current_state.phase == "waiting_for_internet":
             if current_state.internet_wait_resume_phase is None:
@@ -175,11 +180,9 @@ class UpdateService:
         task_description = (
             "machine-wide system updates" if self.task_id == "system" else "personal-tool updates"
         )
-        action = self.coordinator.run_now(
-            now,
-            message=f"An administrator started {task_description}.",
-        )
-        self.on_log(f"An administrator started {task_description} immediately.")
+        start_message = message or f"An administrator started {task_description}."
+        action = self.coordinator.run_now(now, message=start_message)
+        self.on_log(f"{start_message.removesuffix('.')} immediately.")
         return self._run_workflow(action)
 
     def _tick_locked(self, now: datetime | None) -> TickAction:
@@ -248,7 +251,7 @@ class UpdateService:
         restored = self._restore_prompt_wait(self.state_store.load())
         if action == "manual_prompt":
             scheduled = self.coordinator.schedule_prompt_now(self.clock())
-            self.on_log("An administrator scheduled an update prompt.")
+            self.on_log(self.state_store.load().message)
             return scheduled
         return self._tick_ready(self.clock() if self.internet_gate is not None else now, restored)
 

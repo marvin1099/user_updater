@@ -32,6 +32,28 @@ def test_user_tool_commands_run_as_the_selected_desktop_user(tmp_path: Path) -> 
     assert results[0].returncode == 0
 
 
+def test_user_mode_runs_tool_without_privilege_transition_for_current_user(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "marvin"
+    home.mkdir()
+    fake_flatpak = tmp_path / "flatpak"
+    fake_flatpak.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_flatpak.chmod(0o700)
+    user = DesktopUser("marvin", os.getuid(), os.getgid(), home, tmp_path / "runtime")
+
+    updater = UserToolUpdater(which=lambda _name, path=None: str(fake_flatpak))
+    results = updater.update_user(
+        user,
+        ("flatpak",),
+        lambda _line: None,
+        allow_custom_tools=False,
+    )
+
+    assert results[0].status == "updated"
+    assert results[0].returncode == 0
+
+
 def test_pip_user_updates_parse_json_without_jq(tmp_path: Path) -> None:
     home = tmp_path / "alice"
     home.mkdir()

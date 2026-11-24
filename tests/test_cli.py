@@ -26,11 +26,123 @@ class _Logger:
         pass
 
 
-def test_run_now_command_requires_system_scope() -> None:
-    args = cli.build_parser().parse_args(["run-now", "--system"])
+def test_run_now_command_accepts_an_explicit_system_or_user_scope() -> None:
+    parser = cli.build_parser()
+    system_args = parser.parse_args(["run-now", "--system"])
+    user_args = parser.parse_args(["run-now", "--user"])
 
-    assert args.command == "run-now"
-    assert args.system is True
+    assert system_args.command == "run-now"
+    assert system_args.system is True
+    assert user_args.command == "run-now"
+    assert user_args.user is True
+
+
+def test_run_now_command_requires_an_explicit_scope() -> None:
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(["run-now"])
+
+
+def test_schedule_prompt_command_is_user_scoped() -> None:
+    args = cli.build_parser().parse_args(["schedule-prompt", "--user"])
+
+    assert args.command == "schedule-prompt"
+    assert args.user is True
+
+
+def test_user_run_now_uses_a_network_gated_personal_worker(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
+    home = tmp_path / "marvin"
+    home.mkdir()
+    user = DesktopUser("marvin", os.getuid(), os.getgid(), home, tmp_path / "runtime")
+    paths = AppPaths(
+        policy=tmp_path / "project.yaml",
+        state=tmp_path / "user-tools.json",
+        user_state_dir=tmp_path / "users",
+        builder_home=tmp_path / "builders",
+        sudoers=tmp_path / "sudoers",
+        request=tmp_path / "request.json",
+        log_file=tmp_path / "updater.log",
+    )
+    observed: dict[str, object] = {}
+
+    class ImmediateService:
+        def __init__(self, policy, state_store, workflow, **kwargs) -> None:
+            observed["policy"] = policy
+            observed["store"] = state_store
+            observed["workflow"] = workflow
+            observed["kwargs"] = kwargs
+            self.state_store = state_store
+
+        def run_now(self, *, message: str) -> TickAction:
+            observed["message"] = message
+            self.state_store.save(UpdateState(phase="succeeded", message=message))
+            return TickAction.RUN
+
+    monkeypatch.setattr(cli.os, "geteuid", lambda: 12345)
+    monkeypatch.setattr(cli, "user_paths", lambda: paths)
+    monkeypatch.setattr(cli, "load_policy", lambda _path=None: load_policy())
+    monkeypatch.setattr(cli, "configure_logging", lambda *_args, **_kwargs: _Logger())
+    monkeypatch.setattr(cli, "_current_desktop_user", lambda: user)
+    monkeypatch.setattr(cli, "UpdateService", ImmediateService)
+
+    result = cli.main(["run-now", "--user"])
+
+    workflow = observed["workflow"]
+    kwargs = observed["kwargs"]
+    assert result == 0
+    assert observed["message"] == "You started personal-tool updates."
+    assert workflow.policy.updates.run_system is False
+    assert kwargs["task_id"] == "user-tools"
+    assert kwargs["lock_file"].name == f"user-tools-{user.uid}.lock"
+    assert kwargs["request_homes"]()[0].home == home
+    assert kwargs["internet_gate"].stable_seconds == 60
+    assert "You started personal-tool updates." in capsys.readouterr().out
+
+
+def test_user_schedule_prompt_now_queues_a_prompt_not_an_update(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
+    home = tmp_path / "marvin"
+    home.mkdir()
+    user = DesktopUser("marvin", os.getuid(), os.getgid(), home, tmp_path / "runtime")
+    paths = AppPaths(
+        policy=tmp_path / "project.yaml",
+        state=tmp_path / "user-tools.json",
+        user_state_dir=tmp_path / "users",
+        builder_home=tmp_path / "builders",
+        sudoers=tmp_path / "sudoers",
+        request=tmp_path / "request.json",
+        log_file=tmp_path / "updater.log",
+    )
+    observed: dict[str, object] = {}
+
+    class PromptService:
+        def __init__(self, policy, state_store, workflow, **kwargs) -> None:
+            observed["policy"] = policy
+            observed["workflow"] = workflow
+            observed["kwargs"] = kwargs
+
+        def schedule_prompt_now(self) -> TickAction:
+            return TickAction.WAITING_FOR_INTERNET
+
+    monkeypatch.setattr(cli.os, "geteuid", lambda: 12345)
+    monkeypatch.setattr(cli, "user_paths", lambda: paths)
+    monkeypatch.setattr(cli, "load_policy", lambda _path=None: load_policy())
+    monkeypatch.setattr(cli, "configure_logging", lambda *_args, **_kwargs: _Logger())
+    monkeypatch.setattr(cli, "_current_desktop_user", lambda: user)
+    monkeypatch.setattr(cli, "UpdateService", PromptService)
+
+    result = cli.main(["schedule-prompt", "--user"])
+
+    workflow = observed["workflow"]
+    kwargs = observed["kwargs"]
+    assert result == 0
+    assert workflow.policy.updates.run_system is False
+    assert workflow.policy.updates.run_user_tools is True
+    assert kwargs["task_id"] == "user-tools"
+    assert kwargs["internet_gate"].stable_seconds == 60
+    assert "after internet has been stable for 60 seconds" in capsys.readouterr().out
 
 
 def test_system_and_per_user_jobs_are_independent_and_tick_in_parallel(

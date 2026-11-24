@@ -295,8 +295,8 @@ class UpdaterWindow(QWidget):
         self.admin_button = QPushButton("Admin settings")
         self.admin_button.setVisible(admin_enabled)
         self.admin_button.clicked.connect(self.admin_requested.emit)
-        self.user_settings_button = QPushButton("Schedule settings")
-        self.user_settings_button.setObjectName("userScheduleSettings")
+        self.user_settings_button = QPushButton("User settings")
+        self.user_settings_button.setObjectName("userSettingsButton")
         self.user_settings_button.setVisible(user_settings_enabled)
         self.user_settings_button.clicked.connect(self.user_settings_requested.emit)
         self.close_button = QPushButton("Close")
@@ -389,7 +389,7 @@ class UpdaterWindow(QWidget):
             "running",
             "waiting_for_internet",
         }:
-            user_state = UpdateState(phase="disabled", message="Disabled by administrator policy.")
+            user_state = UpdateState(phase="disabled", message="Disabled by settings or policy.")
         if (
             not self.policy.updates.run_system
             and system_state is not None

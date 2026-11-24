@@ -64,14 +64,28 @@ def build_parser() -> argparse.ArgumentParser:
     retry = commands.add_parser("retry", help="Manually retry a failed update")
     _add_scope(retry)
 
-    run_now = commands.add_parser(
-        "run-now", help="Start a fresh machine-wide system update immediately"
-    )
-    run_now.add_argument(
+    run_now = commands.add_parser("run-now", help="Start a fresh update immediately")
+    run_now_scope = run_now.add_mutually_exclusive_group(required=True)
+    run_now_scope.add_argument(
         "--system",
         action="store_true",
-        required=True,
         help="Run machine-wide updates (administrator authorization required)",
+    )
+    run_now_scope.add_argument(
+        "--user",
+        action="store_true",
+        help="Run only this account's personal-tool updates",
+    )
+
+    prompt_now = commands.add_parser(
+        "schedule-prompt",
+        help="Schedule a personal-tool update prompt immediately",
+    )
+    prompt_now.add_argument(
+        "--user",
+        action="store_true",
+        required=True,
+        help="Schedule a prompt for this account's personal-tool updates",
     )
 
     history = commands.add_parser("history", help="Show recent update run summaries")
@@ -119,9 +133,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "retry":
             return _retry(system_mode)
         if args.command == "run-now":
-            if not getattr(args, "system", False):
-                raise ValueError("run-now requires the explicit --system option")
-            return _run_system_now(system_mode)
+            if args.system:
+                return _run_system_now(system_mode)
+            return _run_current_user_now(system_mode)
+        if args.command == "schedule-prompt":
+            return _schedule_current_user_prompt(system_mode)
         if args.command == "history":
             return _history(system_mode, args.limit)
         if args.command == "logs":
@@ -530,6 +546,76 @@ def _run_user_tools_now(system_mode: bool) -> int:
                 continue
             failed = failed or action is TickAction.RECOVERED_INTERRUPTED_RUN or phase == "failed"
     return int(failed)
+
+
+def _current_user_update_service() -> tuple[int, StateStore, UpdateService]:
+    """Build the same locked, network-gated user-tools worker used by the timer."""
+    if os.geteuid() == 0:
+        raise ValueError("personal-tool actions must be requested by the owning user")
+    paths = user_paths()
+    policy = load_policy(paths.policy if paths.policy.exists() else None)
+    if not policy.updates.run_user_tools:
+        raise ValueError("personal-tool updates are disabled by user settings")
+    logger = configure_logging(paths.log_file, private=True)
+    user = _current_desktop_user()
+    user_policy = _user_policy_for(user, policy, logger)
+    store = StateStore(paths.state, file_mode=0o600)
+    workflow = UpdateWorkflow(
+        user_policy,
+        builder_manager=None,
+        session_detector=lambda: [user],
+        test_outcome=lambda: consume_test_outcome(paths.policy, "user_tools"),
+    )
+    service = UpdateService(
+        user_policy,
+        store,
+        workflow,
+        request_homes=lambda: [RequestHome(user.home, user.uid)],
+        on_log=logger.info,
+        task_id="user-tools",
+        response_minutes=policy.schedule.user_tools_response_minutes,
+        lock_file=paths.state.parent / "locks" / f"user-tools-{user.uid}.lock",
+        log_output=True,
+        internet_gate=InternetStabilityGate(
+            stable_seconds=user_policy.network.stable_seconds
+        ),
+    )
+    return user_policy.network.stable_seconds, store, service
+
+
+def _run_current_user_now(system_mode: bool) -> int:
+    """Run personal-tool updates for the invoking user without a response window."""
+    if system_mode:
+        raise ValueError("user-scoped run-now must not use --system")
+    _stable_seconds, store, service = _current_user_update_service()
+    action = service.run_now(message="You started personal-tool updates.")
+    if action is TickAction.WORKER_ALREADY_ACTIVE:
+        raise RuntimeError("your personal-tool update worker is already active")
+    if action is TickAction.RECOVERED_INTERRUPTED_RUN:
+        print(store.load().message)
+        return 1
+    state = store.load()
+    print(state.message)
+    return int(state.phase == "failed")
+
+
+def _schedule_current_user_prompt(system_mode: bool) -> int:
+    """Create a due personal-tool prompt for the invoking user."""
+    if system_mode:
+        raise ValueError("user-scoped prompt scheduling must not use --system")
+    stable_seconds, store, service = _current_user_update_service()
+    action = service.schedule_prompt_now()
+    if action is TickAction.WORKER_ALREADY_ACTIVE:
+        raise RuntimeError("your personal-tool update worker is already active")
+    state = store.load()
+    if action is TickAction.WAITING_FOR_INTERNET:
+        print(
+            "The personal-tool prompt will appear after internet has been stable for "
+            f"{stable_seconds} seconds."
+        )
+    else:
+        print(state.message)
+    return 0
 
 
 def _schedule_prompt(task_id: str, system_mode: bool) -> int:

@@ -216,14 +216,23 @@ class UpdateCoordinator:
         self,
         now: datetime,
         *,
-        message: str = (
-            "An administrator scheduled an update. It will start after the response window."
-        ),
+        message: str | None = None,
     ) -> TickAction:
         """Schedule a fresh due prompt, replacing a prompt or deferral but not a running task."""
         state = self.state_store.load()
         if state.phase == "running":
             raise ValueError(f"cannot schedule another update while this task is {state.phase}")
+        if message is None:
+            if self.task_id == "system":
+                message = (
+                    "An administrator scheduled a system update. "
+                    "It will start after the response window."
+                )
+            else:
+                message = (
+                    "A personal-tool update prompt was scheduled. "
+                    "It will start after the response window."
+                )
 
         run_id = uuid4().hex
         self.state_store.save(

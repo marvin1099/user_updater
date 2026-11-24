@@ -299,6 +299,7 @@ def test_manually_queued_prompt_waits_for_internet_before_becoming_visible(
     assert prompted.value == "waiting_for_response"
     assert store.load().phase == "awaiting_response"
     assert store.load().internet_wait_action is None
+    assert "personal-tool update prompt" in store.load().message
     assert workflow.calls == 0
 
 
@@ -607,6 +608,49 @@ def test_admin_user_tools_run_now_logs_the_correct_task(tmp_path: Path) -> None:
     service.run_now(NOW)
 
     assert logs[0] == "An administrator started personal-tool updates immediately."
+
+
+def test_personal_user_run_now_bypasses_the_prompt_and_uses_user_facing_message(
+    tmp_path: Path,
+) -> None:
+    store = StateStore(tmp_path / "user.json")
+    workflow = FakeWorkflow()
+    logs: list[str] = []
+    service = UpdateService(
+        load_policy(),
+        store,
+        workflow,
+        task_id="user-tools",
+        clock=lambda: NOW,
+        on_log=logs.append,
+    )
+
+    action = service.run_now(message="You started personal-tool updates.")
+
+    assert action.value == "run"
+    assert workflow.calls == 1
+    assert store.load().phase == "succeeded"
+    assert logs[0] == "You started personal-tool updates immediately."
+
+
+def test_personal_user_prompt_now_uses_personal_update_message(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "user.json")
+    workflow = FakeWorkflow()
+    service = UpdateService(
+        load_policy(),
+        store,
+        workflow,
+        task_id="user-tools",
+        response_minutes=5,
+        clock=lambda: NOW,
+    )
+
+    action = service.schedule_prompt_now(NOW)
+
+    assert action.value == "waiting_for_response"
+    assert store.load().phase == "awaiting_response"
+    assert "personal-tool update prompt was scheduled" in store.load().message
+    assert workflow.calls == 0
 
 
 def test_scheduled_prompt_waits_for_response_before_running_updates(tmp_path: Path) -> None:

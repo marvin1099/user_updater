@@ -16,7 +16,8 @@ from ..state import StateStore
 from ..tool_preferences import UserToolPreferenceStore
 from .admin import open_admin_settings, start_system_retry
 from .full_window import FullDetailsWindow
-from .user_settings import open_user_schedule_settings
+from .user_actions import schedule_personal_prompt, start_personal_update
+from .user_settings import open_user_settings
 from .window import UpdaterWindow
 
 
@@ -116,11 +117,13 @@ def run_gui(system_mode: bool = False) -> int:
         )
     )
     window.user_settings_requested.connect(
-        lambda: open_user_schedule_settings(
+        lambda: open_user_settings(
             window,
             paths.policy,
             current_policy,
             policy_saved,
+            on_run_now=lambda: start_personal_update(window),
+            on_schedule_prompt=lambda: schedule_personal_prompt(window),
         )
     )
     window.system_retry_requested.connect(lambda: start_system_retry(window))

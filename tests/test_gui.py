@@ -13,7 +13,7 @@ from PySide6.QtWidgets import QApplication, QCheckBox, QGroupBox, QLabel, QWidge
 from user_updater.gui import admin as admin_gui
 from user_updater.gui.admin import AdminSettingsDialog
 from user_updater.gui.full_window import FullDetailsWindow
-from user_updater.gui.user_settings import UserScheduleDialog, save_user_schedule_policy
+from user_updater.gui.user_settings import UserSettingsDialog, save_user_settings_policy
 from user_updater.gui.window import UpdaterWindow
 from user_updater.history import RunHistoryStore, history_path_for_state
 from user_updater.logging_config import daily_log_path
@@ -491,33 +491,64 @@ def test_admin_settings_dialog_builds_a_valid_policy_mapping(tmp_path: Path) -> 
     dialog.deleteLater()
 
 
-def test_user_schedule_settings_save_only_the_users_calendar_schedule(tmp_path: Path) -> None:
+def test_user_settings_save_personal_options_without_changing_system_policy(
+    tmp_path: Path,
+) -> None:
     _application()
     policy = load_policy()
-    dialog = UserScheduleDialog(policy)
+    dialog = UserSettingsDialog(policy)
+    actions: list[str] = []
+    dialog.run_user_now_requested.connect(lambda: actions.append("run-now"))
+    dialog.schedule_user_prompt_requested.connect(lambda: actions.append("schedule-prompt"))
+    dialog.run_user_now_button.click()
+    dialog.test_prompt_button.click()
+    assert actions == ["run-now", "schedule-prompt"]
 
-    assert {
-        day for day, check in dialog.day_checks.items() if check.isChecked()
-    } == {"thu", "sun"}
+    assert {day for day, check in dialog.day_checks.items() if check.isChecked()} == {"thu", "sun"}
     dialog.day_checks["thu"].setChecked(False)
     dialog.day_checks["tue"].setChecked(True)
     dialog.start_time.setTime(QTime(20, 15))
+    dialog.response_minutes.setValue(12)
+    dialog.internet_stability_seconds.setValue(90)
+    dialog.allow_deferral.setChecked(False)
+    dialog.deferral_options.setText("2, 6")
+    dialog.max_deferral_hours.setValue(36)
+    dialog.automatic_retries.setValue(4)
+    dialog.retry_delay_minutes.setValue(30)
+    dialog.manual_retries.setValue(2)
+    dialog.run_user_tools.setChecked(False)
+    assert not dialog.run_user_now_button.isEnabled()
+    assert not dialog.test_prompt_button.isEnabled()
+    dialog.automatic_window_positioning.setChecked(False)
     updated = dialog.policy_from_controls()
 
     assert updated.schedule.days == policy.schedule.days
     assert updated.schedule.time == policy.schedule.time
     assert updated.schedule.user_tools_days == ("tue", "sun")
     assert updated.schedule.user_tools_time == "20:15"
+    assert updated.schedule.user_tools_response_minutes == 12
+    assert updated.network.stable_seconds == 90
+    assert updated.interaction.allow_deferral is False
+    assert updated.interaction.deferral_options_hours == (2, 6)
+    assert updated.interaction.max_user_tools_deferral_hours == 36
+    assert updated.retry.user_tools.automatic_attempts == 4
+    assert updated.retry.user_tools.delay_minutes == 30
+    assert updated.retry.user_tools.user_manual_attempts == 2
+    assert updated.updates.run_user_tools is False
+    assert updated.window.automatic_positioning is False
+    assert updated.updates.run_system == policy.updates.run_system
+    assert updated.schedule.days == policy.schedule.days
+    assert updated.retry.system == policy.retry.system
 
     policy_file = tmp_path / ".config" / "user-updater" / "project.yaml"
-    saved = save_user_schedule_policy(policy_file, updated)
+    saved = save_user_settings_policy(policy_file, updated)
 
     assert saved == updated
     assert load_policy(policy_file) == updated
     assert policy_file.stat().st_mode & 0o777 == 0o600
 
 
-def test_user_only_compact_window_shows_schedule_settings_without_admin_or_system_controls(
+def test_user_only_compact_window_shows_user_settings_without_admin_or_system_controls(
     tmp_path: Path,
 ) -> None:
     _application()
@@ -531,6 +562,7 @@ def test_user_only_compact_window_shows_schedule_settings_without_admin_or_syste
 
     assert window.system_panel is None
     assert not window.user_settings_button.isHidden()
+    assert window.user_settings_button.text() == "User settings"
     assert window.admin_button.isHidden()
     window.deleteLater()
 
