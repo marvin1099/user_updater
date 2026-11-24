@@ -23,8 +23,10 @@ def test_default_policy_matches_product_defaults() -> None:
     assert policy.schedule.days == ("thu", "sun")
     assert policy.schedule.time == "03:00"
     assert policy.schedule.response_minutes == 5
-    assert policy.schedule.user_tools_interval_hours == 24
+    assert policy.schedule.user_tools_days == ("thu", "sun")
+    assert policy.schedule.user_tools_time == "18:00"
     assert policy.schedule.user_tools_response_minutes == 5
+    assert policy.network.stable_seconds == 60
     assert policy.interaction.allow_deferral is True
     assert policy.interaction.allow_system_deferral is True
     assert policy.interaction.deferral_options_hours == (1, 4, 24)
@@ -55,6 +57,26 @@ def test_automatic_window_positioning_defaults_on_and_can_be_disabled() -> None:
     updated = validate_policy_data(raw)
     assert updated.window.automatic_positioning is False
     assert policy_to_mapping(updated)["window"]["automatic_positioning"] is False
+
+
+def test_network_stability_duration_defaults_to_one_minute_and_round_trips() -> None:
+    raw = policy_to_mapping(load_policy())
+    assert raw["network"]["stable_seconds"] == 60
+
+    raw["network"]["stable_seconds"] = 120
+    updated = validate_policy_data(raw)
+
+    assert updated.network.stable_seconds == 120
+    assert policy_to_mapping(updated)["network"]["stable_seconds"] == 120
+
+
+@pytest.mark.parametrize("seconds", [0, 3601, True])
+def test_network_stability_duration_rejects_out_of_range_values(seconds: object) -> None:
+    raw = policy_to_mapping(load_policy())
+    raw["network"]["stable_seconds"] = seconds
+
+    with pytest.raises(PolicyError, match="network.stable_seconds"):
+        validate_policy_data(raw)
 
 
 def test_system_script_hooks_default_off_and_round_trip_independently() -> None:
@@ -221,13 +243,49 @@ def test_admin_policy_write_validates_and_round_trips_atomically(tmp_path: Path)
     path = tmp_path / "etc" / "project.yaml"
     original = load_policy(PROJECT_ROOT / "project.yaml")
     mapping = policy_to_mapping(original)
-    mapping["schedule"]["user_tools_interval_hours"] = 12
+    mapping["schedule"]["user_tools_days"] = ["tue", "thu"]
+    mapping["schedule"]["user_tools_time"] = "19:30"
 
     saved = write_policy(path, mapping)
 
-    assert saved.schedule.user_tools_interval_hours == 12
+    assert saved.schedule.user_tools_days == ("tue", "thu")
+    assert saved.schedule.user_tools_time == "19:30"
     assert load_policy(path) == saved
     assert path.stat().st_mode & 0o777 == 0o644
+
+
+def test_legacy_user_tools_interval_is_ignored_and_removed_on_save(tmp_path: Path) -> None:
+    config = tmp_path / "project.yaml"
+    config.write_text(
+        "version: 1\nschedule:\n  user_tools_interval_hours: 12\n",
+        encoding="utf-8",
+    )
+
+    policy = load_policy(config)
+
+    assert policy.schedule.user_tools_days == ("thu", "sun")
+    assert policy.schedule.user_tools_time == "18:00"
+    assert "user_tools_interval_hours" not in policy_to_mapping(policy)["schedule"]
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "message"),
+    [
+        ("user_tools_days", [], "schedule.user_tools_days"),
+        ("user_tools_days", ["mon", "mon"], "schedule.user_tools_days"),
+        ("user_tools_time", "25:00", "schedule.user_tools_time"),
+    ],
+)
+def test_personal_tool_schedule_rejects_invalid_days_and_times(
+    key: str,
+    value: object,
+    message: str,
+) -> None:
+    raw = policy_to_mapping(load_policy())
+    raw["schedule"][key] = value
+
+    with pytest.raises(PolicyError, match=message):
+        validate_policy_data(raw)
 
 
 def test_forced_test_outcomes_are_consumed_once_with_failures_first(tmp_path: Path) -> None:

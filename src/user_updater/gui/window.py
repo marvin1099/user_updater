@@ -22,7 +22,9 @@ from ..rescheduling import available_reschedule_hours
 from ..state import StateError, StateStore, UpdateState
 from .placement import WindowPlacement
 
-_DISMISSIBLE_PHASES = frozenset({"awaiting_response", "running", "deferred", "succeeded", "failed"})
+_DISMISSIBLE_PHASES = frozenset(
+    {"awaiting_response", "waiting_for_internet", "running", "deferred", "succeeded", "failed"}
+)
 _TERMINAL_PHASES = frozenset({"succeeded", "failed"})
 
 
@@ -205,6 +207,7 @@ class UpdaterWindow(QWidget):
     phase_changed = Signal(str)
     full_mode_requested = Signal()
     admin_requested = Signal()
+    user_settings_requested = Signal()
     system_retry_requested = Signal()
 
     def __init__(
@@ -217,6 +220,7 @@ class UpdaterWindow(QWidget):
         system_state_store: StateStore | None = None,
         system_request_file: Path | None = None,
         admin_enabled: bool = False,
+        user_settings_enabled: bool = False,
     ) -> None:
         super().__init__(None)
         self.policy = policy
@@ -230,7 +234,7 @@ class UpdaterWindow(QWidget):
         self._system_retry_requested_for: str | None = None
         self._user_retry_requested_for: str | None = None
         self.setWindowTitle("User Updater Status")
-        self._build_ui(request_file, system_request_file, admin_enabled)
+        self._build_ui(request_file, system_request_file, admin_enabled, user_settings_enabled)
         self._placement = WindowPlacement(
             self,
             title=self.windowTitle(),
@@ -247,6 +251,7 @@ class UpdaterWindow(QWidget):
         request_file: Path,
         system_request_file: Path | None,
         admin_enabled: bool,
+        user_settings_enabled: bool,
     ) -> None:
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -290,6 +295,10 @@ class UpdaterWindow(QWidget):
         self.admin_button = QPushButton("Admin settings")
         self.admin_button.setVisible(admin_enabled)
         self.admin_button.clicked.connect(self.admin_requested.emit)
+        self.user_settings_button = QPushButton("Schedule settings")
+        self.user_settings_button.setObjectName("userScheduleSettings")
+        self.user_settings_button.setVisible(user_settings_enabled)
+        self.user_settings_button.clicked.connect(self.user_settings_requested.emit)
         self.close_button = QPushButton("Close")
         self.close_button.hide()
         self.system_retry_button = (
@@ -306,6 +315,7 @@ class UpdaterWindow(QWidget):
         buttons = QHBoxLayout()
         buttons.addWidget(self.full_button)
         buttons.addWidget(self.admin_button)
+        buttons.addWidget(self.user_settings_button)
         buttons.addStretch(1)
         buttons.addWidget(self.close_button)
         layout = QVBoxLayout(self)
@@ -375,12 +385,15 @@ class UpdaterWindow(QWidget):
             return
 
         self._status_error_dismissed = False
-        if not self.policy.updates.run_user_tools and user_state.phase != "running":
+        if not self.policy.updates.run_user_tools and user_state.phase not in {
+            "running",
+            "waiting_for_internet",
+        }:
             user_state = UpdateState(phase="disabled", message="Disabled by administrator policy.")
         if (
             not self.policy.updates.run_system
             and system_state is not None
-            and system_state.phase != "running"
+            and system_state.phase not in {"running", "waiting_for_internet"}
         ):
             system_state = UpdateState(
                 phase="disabled", message="Disabled by administrator policy."
@@ -414,6 +427,7 @@ class UpdaterWindow(QWidget):
         states = {"user-tools": user_state}
         if system_state is not None:
             states["system"] = system_state
+        previous_phase = self._phase
         if startup_refresh:
             # Persisted successes are old news after a desktop restart; keep
             # them from reopening the compact window until a new run occurs.
@@ -422,6 +436,9 @@ class UpdaterWindow(QWidget):
                 for task, state in states.items()
                 if state.phase == "succeeded"
             )
+        for task, state in states.items():
+            if state.phase == "waiting_for_internet" and previous_phase != "waiting_for_internet":
+                self._dismissed_runs.discard((task, state.run_id))
         live_run_keys = {
             (task, state.run_id)
             for task, state in states.items()
@@ -430,9 +447,15 @@ class UpdaterWindow(QWidget):
         self._dismissed_runs.intersection_update(live_run_keys)
 
         running = [(task, state) for task, state in states.items() if state.phase == "running"]
+        waiting_for_internet = any(
+            state.phase == "waiting_for_internet" for state in states.values()
+        )
+        waiting_for_prompt = any(
+            state.phase == "waiting_for_internet" and state.internet_wait_action is not None
+            for state in states.values()
+        )
         awaiting = any(state.phase == "awaiting_response" for state in states.values())
         deferred = any(state.phase == "deferred" for state in states.values())
-        previous_phase = self._phase
         if running:
             self._phase = "running"
             self.heading.setText("Updates are running")
@@ -443,6 +466,19 @@ class UpdaterWindow(QWidget):
             self._phase = "awaiting_response"
             self.heading.setText("Update scheduled")
             self.message.setText("Respond to each scheduled task below. No response means proceed.")
+        elif waiting_for_internet:
+            self._phase = "waiting_for_internet"
+            self.heading.setText("Waiting for internet")
+            if waiting_for_prompt:
+                self.message.setText(
+                    "The update prompt will appear after internet has been stable for "
+                    f"{self.policy.network.stable_seconds} seconds."
+                )
+            else:
+                self.message.setText(
+                    "Update commands have not started. Internet must be stable for "
+                    f"{self.policy.network.stable_seconds} seconds first."
+                )
         elif deferred:
             self._phase = "deferred"
             self.heading.setText("Update rescheduled")

@@ -1,7 +1,7 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from user_updater.policy import load_policy
+from user_updater.policy import load_policy, policy_to_mapping, validate_policy_data
 from user_updater.schedule import next_scheduled_after
 
 
@@ -30,3 +30,18 @@ def test_local_schedule_remains_at_wall_clock_time_across_daylight_saving() -> N
     scheduled = next_scheduled_after(policy, before_spring_transition)
 
     assert scheduled == datetime(2026, 3, 29, 3, 0, tzinfo=ZoneInfo("Europe/Berlin"))
+
+
+def test_personal_tools_have_an_independent_calendar_schedule() -> None:
+    raw = policy_to_mapping(load_policy())
+    raw["schedule"]["user_tools_days"] = ["mon", "wed"]
+    raw["schedule"]["user_tools_time"] = "18:30"
+    policy = validate_policy_data(raw)
+    sunday_evening = datetime(2026, 11, 15, 19, 0, tzinfo=ZoneInfo("UTC"))
+
+    assert next_scheduled_after(policy, sunday_evening, "user-tools") == datetime(
+        2026, 11, 16, 18, 30, tzinfo=ZoneInfo("UTC")
+    )
+    assert next_scheduled_after(policy, sunday_evening, "system") == datetime(
+        2026, 11, 19, 3, 0, tzinfo=ZoneInfo("UTC")
+    )

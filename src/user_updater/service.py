@@ -9,13 +9,14 @@ import stat
 import time
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Protocol
 
 from .coordinator import TickAction, UpdateCoordinator
 from .history import HistoryError, RunHistoryStore, history_path_for_state
+from .internet import InternetStabilityGate
 from .policy import Policy, TaskRetryPolicy
 from .requests import (
     UserRequest,
@@ -27,7 +28,7 @@ from .requests import (
 )
 from .runner import strip_ansi
 from .schedule import local_timezone
-from .state import StateError, StateStore
+from .state import StateError, StateStore, UpdateState
 from .workflow import WorkflowResult
 
 
@@ -61,12 +62,12 @@ class UpdateService:
         on_log: Callable[[str], None] = print,
         lock_file: Path | None = None,
         task_id: str = "update",
-        interval_hours: int | None = None,
         response_minutes: int | None = None,
         history_store: RunHistoryStore | None = None,
         retry_policy: TaskRetryPolicy | None = None,
         log_output: bool = True,
         on_output_log: Callable[[str], None] | None = None,
+        internet_gate: InternetStabilityGate | None = None,
     ) -> None:
         self.state_store = state_store
         selected_retry_policy = retry_policy or (
@@ -75,7 +76,6 @@ class UpdateService:
         self.coordinator = UpdateCoordinator(
             policy,
             state_store,
-            interval_hours=interval_hours,
             response_minutes=response_minutes,
             retry_policy=selected_retry_policy,
             task_id=task_id,
@@ -86,6 +86,7 @@ class UpdateService:
         self.on_log = on_log
         self.log_output = log_output
         self.on_output_log = on_output_log
+        self.internet_gate = internet_gate
         self.lock_file = Path(lock_file) if lock_file is not None else None
         self.task_id = task_id
         self.history_store = history_store or RunHistoryStore(
@@ -111,6 +112,31 @@ class UpdateService:
         current = now or self.clock()
 
         def schedule() -> TickAction:
+            if self.internet_gate is not None:
+                state = self.state_store.load()
+                if state.phase == "waiting_for_internet":
+                    if state.internet_wait_resume_phase is None:
+                        raise ValueError("cannot schedule a prompt while an update is waiting")
+                    state = replace(
+                        state,
+                        internet_wait_action="manual_prompt",
+                        message="Waiting for stable internet before notifying users.",
+                    )
+                else:
+                    if state.phase == "running":
+                        return self.coordinator.schedule_prompt_now(current)
+                    state = replace(
+                        state,
+                        phase="waiting_for_internet",
+                        internet_wait_resume_phase=state.phase,
+                        internet_wait_resume_message=state.message,
+                        internet_wait_action="manual_prompt",
+                        message="Waiting for stable internet before notifying users.",
+                    )
+                self.state_store.save(state)
+                self.on_log(state.message)
+                return TickAction.WAITING_FOR_INTERNET
+
             action = self.coordinator.schedule_prompt_now(current)
             self.on_log("An administrator scheduled an update prompt.")
             return action
@@ -135,7 +161,12 @@ class UpdateService:
             os.close(descriptor)
 
     def _run_now_locked(self, now: datetime) -> TickAction:
-        if self.state_store.load().phase == "running":
+        current_state = self.state_store.load()
+        if current_state.phase == "waiting_for_internet":
+            if current_state.internet_wait_resume_phase is None:
+                return self._run_workflow(TickAction.RUN)
+            current_state = self._restore_prompt_wait(current_state)
+        if current_state.phase == "running":
             action = self.coordinator.tick(now)
             if action is TickAction.RECOVERED_INTERRUPTED_RUN:
                 self.on_log(self.state_store.load().message)
@@ -154,6 +185,15 @@ class UpdateService:
     def _tick_locked(self, now: datetime | None) -> TickAction:
         current = now or self.clock()
         state = self.state_store.load()
+        if state.phase == "waiting_for_internet":
+            if state.internet_wait_resume_phase is not None:
+                return self._resume_prompt_wait(current, state)
+            return self._run_workflow(TickAction.RUN)
+        if self.internet_gate is not None and self.coordinator.prompt_is_due(current):
+            return self._wait_for_prompt_then_tick(state)
+        return self._tick_ready(current, state)
+
+    def _tick_ready(self, current: datetime, state: UpdateState) -> TickAction:
         if state.phase == "failed" and self.task_id == "user-tools":
             requests = self._read_requests(state.run_id)
             if any(
@@ -182,12 +222,101 @@ class UpdateService:
 
         return self._run_workflow(action)
 
+    def _wait_for_prompt_then_tick(self, state: UpdateState) -> TickAction:
+        """Pass the internet gate before creating a response prompt."""
+        waiting = replace(
+            state,
+            phase="waiting_for_internet",
+            internet_wait_resume_phase=state.phase,
+            internet_wait_resume_message=state.message,
+            internet_wait_action="scheduled_prompt",
+            message="Waiting for stable internet before notifying users about updates.",
+        )
+        self.state_store.save(waiting)
+        self.on_log(waiting.message)
+        self._wait_for_internet(
+            "Internet has been stable; showing the update prompt."
+        )
+        restored = self._restore_prompt_wait(self.state_store.load())
+        # Start the response window after the potentially long connectivity wait.
+        return self._tick_ready(self.clock(), restored)
+
+    def _resume_prompt_wait(self, now: datetime, state: UpdateState) -> TickAction:
+        """Continue a persisted wait and then either prompt or start the queued prompt."""
+        action = state.internet_wait_action
+        self._wait_for_internet("Internet has been stable; showing the update prompt.")
+        restored = self._restore_prompt_wait(self.state_store.load())
+        if action == "manual_prompt":
+            scheduled = self.coordinator.schedule_prompt_now(self.clock())
+            self.on_log("An administrator scheduled an update prompt.")
+            return scheduled
+        return self._tick_ready(self.clock() if self.internet_gate is not None else now, restored)
+
+    def _restore_prompt_wait(self, state: UpdateState) -> UpdateState:
+        """Restore the state that was replaced temporarily by a prompt connectivity wait."""
+        resume_phase = state.internet_wait_resume_phase
+        if resume_phase is None:
+            return state
+        restored = replace(
+            state,
+            phase=resume_phase,
+            message=state.internet_wait_resume_message or "Waiting for the next scheduled update.",
+            internet_wait_resume_phase=None,
+            internet_wait_resume_message=None,
+            internet_wait_action=None,
+        )
+        self.state_store.save(restored)
+        return restored
+
+    def _wait_for_internet(self, ready_message: str | None = None) -> None:
+        if self.internet_gate is None:
+            return
+
+        def update_gate_status(message: str) -> None:
+            current = self.state_store.load()
+            if current.phase == "waiting_for_internet" and current.message != message:
+                self.state_store.save(replace(current, message=message))
+                self.on_log(message)
+
+        self.internet_gate.wait_until_stable(
+            update_gate_status,
+            ready_message=ready_message,
+        )
+
     def _retry_failed_locked(self, now: datetime) -> TickAction:
         action = self.coordinator.retry_failed(now)
         self.on_log("An authorized manual retry was requested.")
         return self._run_workflow(action)
 
     def _run_workflow(self, action: TickAction) -> TickAction:
+        if self.internet_gate is not None:
+            state = self.state_store.load()
+            if state.phase != "waiting_for_internet":
+                state = replace(
+                    state,
+                    phase="waiting_for_internet",
+                    started_at=None,
+                    message="Checking internet connectivity; update commands have not started.",
+                    internet_wait_resume_phase=None,
+                    internet_wait_resume_message=None,
+                    internet_wait_action=None,
+                )
+                self.state_store.save(state)
+                self.on_log(state.message)
+            self._wait_for_internet()
+            state = self.state_store.load()
+            self.state_store.save(
+                replace(
+                    state,
+                    phase="running",
+                    started_at=self.clock().isoformat(),
+                    message="Internet is stable; update commands are starting.",
+                    internet_wait_resume_phase=None,
+                    internet_wait_resume_message=None,
+                    internet_wait_action=None,
+                )
+            )
+
         tail: deque[str] = deque(maxlen=200)
         progress_active = False
         last_progress_write = 0.0

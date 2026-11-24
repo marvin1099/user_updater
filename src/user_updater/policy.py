@@ -24,10 +24,12 @@ _DEFAULTS: dict[str, Any] = {
         "days": ["thu", "sun"],
         "time": "03:00",
         "response_minutes": 5,
-        "user_tools_interval_hours": 24,
+        "user_tools_days": ["thu", "sun"],
+        "user_tools_time": "18:00",
         "user_tools_response_minutes": 5,
         "check_interval_minutes": 1,
     },
+    "network": {"stable_seconds": 60},
     "interaction": {
         "allow_deferral": True,
         "allow_system_deferral": True,
@@ -75,9 +77,15 @@ class SchedulePolicy:
     days: tuple[str, ...]
     time: str
     response_minutes: int
-    user_tools_interval_hours: int
+    user_tools_days: tuple[str, ...]
+    user_tools_time: str
     user_tools_response_minutes: int
     check_interval_minutes: int
+
+
+@dataclass(frozen=True)
+class NetworkPolicy:
+    stable_seconds: int
 
 
 @dataclass(frozen=True)
@@ -148,6 +156,7 @@ class SystemScriptsPolicy:
 class Policy:
     version: int
     schedule: SchedulePolicy
+    network: NetworkPolicy
     interaction: InteractionPolicy
     updates: UpdatePolicy
     retry: RetryPolicy
@@ -185,6 +194,10 @@ def validate_policy_data(raw: Any) -> Policy:
         # Older policy files limited the number of deferrals. Accept and discard
         # this obsolete setting so existing installations migrate on next save.
         interaction.pop("max_deferrals_per_run", None)
+    schedule = raw.get("schedule")
+    if isinstance(schedule, dict):
+        # Personal tools now use the same calendar planner as system updates.
+        schedule.pop("user_tools_interval_hours", None)
     merged = _merge_checked(_DEFAULTS, raw, "policy")
     return _make_policy(merged)
 
@@ -197,10 +210,12 @@ def policy_to_mapping(policy: Policy) -> dict[str, Any]:
             "days": list(policy.schedule.days),
             "time": policy.schedule.time,
             "response_minutes": policy.schedule.response_minutes,
-            "user_tools_interval_hours": policy.schedule.user_tools_interval_hours,
+            "user_tools_days": list(policy.schedule.user_tools_days),
+            "user_tools_time": policy.schedule.user_tools_time,
             "user_tools_response_minutes": policy.schedule.user_tools_response_minutes,
             "check_interval_minutes": policy.schedule.check_interval_minutes,
         },
+        "network": {"stable_seconds": policy.network.stable_seconds},
         "interaction": {
             "allow_deferral": policy.interaction.allow_deferral,
             "allow_system_deferral": policy.interaction.allow_system_deferral,
@@ -358,27 +373,40 @@ def _merge_checked(default: dict[str, Any], override: dict[str, Any], path: str)
     return result
 
 
-def _make_policy(raw: dict[str, Any]) -> Policy:
-    version = _integer(raw["version"], "version", minimum=1, maximum=1)
-
-    schedule_raw = raw["schedule"]
-    days_raw = schedule_raw["days"]
-    if not isinstance(days_raw, list) or not days_raw:
-        raise PolicyError("schedule.days must be a non-empty list")
-    days = tuple(str(day).lower() for day in days_raw)
+def _schedule_days(raw: Any, name: str) -> tuple[str, ...]:
+    if not isinstance(raw, list) or not raw:
+        raise PolicyError(f"{name} must be a non-empty list")
+    days = tuple(str(day).lower() for day in raw)
     if len(set(days)) != len(days) or any(day not in _DAYS for day in days):
-        raise PolicyError(f"schedule.days must contain unique values from {_DAYS}")
+        raise PolicyError(f"{name} must contain unique values from {_DAYS}")
+    return days
 
-    clock = schedule_raw["time"]
-    if not isinstance(clock, str) or len(clock) != 5 or clock[2] != ":":
-        raise PolicyError("schedule.time must use HH:MM 24-hour format")
-    hour, minute = clock.split(":", 1)
+
+def _schedule_time(raw: Any, name: str) -> str:
+    if not isinstance(raw, str) or len(raw) != 5 or raw[2] != ":":
+        raise PolicyError(f"{name} must use HH:MM 24-hour format")
+    hour, minute = raw.split(":", 1)
     if (
         not hour.isdigit()
         or not minute.isdigit()
         or not (0 <= int(hour) <= 23 and 0 <= int(minute) <= 59)
     ):
-        raise PolicyError("schedule.time must use a valid HH:MM 24-hour time")
+        raise PolicyError(f"{name} must use a valid HH:MM 24-hour time")
+    return raw
+
+
+def _make_policy(raw: dict[str, Any]) -> Policy:
+    version = _integer(raw["version"], "version", minimum=1, maximum=1)
+
+    schedule_raw = raw["schedule"]
+    days = _schedule_days(schedule_raw["days"], "schedule.days")
+    clock = _schedule_time(schedule_raw["time"], "schedule.time")
+    user_tools_days = _schedule_days(
+        schedule_raw["user_tools_days"], "schedule.user_tools_days"
+    )
+    user_tools_time = _schedule_time(
+        schedule_raw["user_tools_time"], "schedule.user_tools_time"
+    )
 
     schedule = SchedulePolicy(
         days=days,
@@ -386,12 +414,8 @@ def _make_policy(raw: dict[str, Any]) -> Policy:
         response_minutes=_integer(
             schedule_raw["response_minutes"], "schedule.response_minutes", minimum=1, maximum=60
         ),
-        user_tools_interval_hours=_integer(
-            schedule_raw["user_tools_interval_hours"],
-            "schedule.user_tools_interval_hours",
-            minimum=1,
-            maximum=720,
-        ),
+        user_tools_days=user_tools_days,
+        user_tools_time=user_tools_time,
         user_tools_response_minutes=_integer(
             schedule_raw["user_tools_response_minutes"],
             "schedule.user_tools_response_minutes",
@@ -404,6 +428,16 @@ def _make_policy(raw: dict[str, Any]) -> Policy:
             minimum=1,
             maximum=60,
         ),
+    )
+
+    network_raw = raw["network"]
+    network = NetworkPolicy(
+        stable_seconds=_integer(
+            network_raw["stable_seconds"],
+            "network.stable_seconds",
+            minimum=1,
+            maximum=3600,
+        )
     )
 
     interaction_raw = raw["interaction"]
@@ -494,6 +528,7 @@ def _make_policy(raw: dict[str, Any]) -> Policy:
     return Policy(
         version=version,
         schedule=schedule,
+        network=network,
         interaction=interaction,
         updates=updates,
         retry=retry,

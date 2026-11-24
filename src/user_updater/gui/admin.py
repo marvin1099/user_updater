@@ -208,18 +208,56 @@ class AdminSettingsDialog(QDialog):
         system_form.addRow("Local start time", self.system_time)
         system_form.addRow("Response window (minutes)", self.system_response)
 
-        user_schedule = QGroupBox("Personal user-tool schedule")
+        user_schedule = QGroupBox("Personal tool schedule")
         user_form = QFormLayout(user_schedule)
-        self.user_interval = _spin(policy.schedule.user_tools_interval_hours, 1, 720)
+        self.user_day_checks: dict[str, QCheckBox] = {}
+        user_days_widget = QWidget()
+        user_days_layout = QGridLayout(user_days_widget)
+        user_days_layout.setContentsMargins(0, 0, 0, 0)
+        user_days_layout.setHorizontalSpacing(14)
+        user_days_layout.setVerticalSpacing(2)
+        for index, day in enumerate(_DAYS):
+            check = QCheckBox(day.title())
+            check.setChecked(day in policy.schedule.user_tools_days)
+            self.user_day_checks[day] = check
+            row, column = divmod(index, 4)
+            user_days_layout.addWidget(check, row, column)
+        self.user_tools_time = QTimeEdit(
+            QTime.fromString(policy.schedule.user_tools_time, "HH:mm")
+        )
+        self.user_tools_time.setDisplayFormat("HH:mm")
         self.user_response = _spin(policy.schedule.user_tools_response_minutes, 1, 60)
-        user_form.addRow("Repeat interval (hours)", self.user_interval)
+        user_form.addRow("Days", user_days_widget)
+        user_form.addRow("Local start time", self.user_tools_time)
         user_form.addRow("Response window (minutes)", self.user_response)
+        user_note = QLabel(
+            "Missed runs are coalesced and start once when that user next has a desktop session."
+        )
+        user_note.setWordWrap(True)
+        user_form.addRow(user_note)
+        user_schedule.setEnabled(policy.updates.run_user_tools)
+        self.run_user_tools.toggled.connect(user_schedule.setEnabled)
 
         self.schedule_group = QGroupBox("Update schedules")
         schedules_layout = QVBoxLayout(self.schedule_group)
         schedules_layout.addWidget(system_schedule)
         schedules_layout.addWidget(user_schedule)
         form.addRow(self.schedule_group)
+
+        network_group = QGroupBox("Network readiness")
+        network_form = QFormLayout(network_group)
+        self.internet_stability_seconds = _spin(policy.network.stable_seconds, 1, 3600)
+        self.internet_stability_seconds.setObjectName("internetStabilitySeconds")
+        network_form.addRow(
+            "Stable internet before updates (seconds)", self.internet_stability_seconds
+        )
+        network_note = QLabel(
+            "Internet must remain available for this long before users are notified and before "
+            "system or personal-tool commands and hooks start. A failed check restarts the timer."
+        )
+        network_note.setWordWrap(True)
+        network_form.addRow(network_note)
+        form.addRow(network_group)
 
         window_group = QGroupBox("Window positioning")
         window_layout = QVBoxLayout(window_group)
@@ -466,6 +504,11 @@ class AdminSettingsDialog(QDialog):
         selected_days = tuple(day for day in _DAYS if self.day_checks[day].isChecked())
         if not selected_days:
             raise PolicyError("select at least one system update day")
+        selected_user_days = tuple(
+            day for day in _DAYS if self.user_day_checks[day].isChecked()
+        )
+        if not selected_user_days:
+            raise PolicyError("select at least one personal-tool update day")
         try:
             options = tuple(
                 int(value.strip())
@@ -482,8 +525,13 @@ class AdminSettingsDialog(QDialog):
                 days=selected_days,
                 time=self.system_time.time().toString("HH:mm"),
                 response_minutes=self.system_response.value(),
-                user_tools_interval_hours=self.user_interval.value(),
+                user_tools_days=selected_user_days,
+                user_tools_time=self.user_tools_time.time().toString("HH:mm"),
                 user_tools_response_minutes=self.user_response.value(),
+            ),
+            network=replace(
+                self.policy.network,
+                stable_seconds=self.internet_stability_seconds.value(),
             ),
             interaction=replace(
                 self.policy.interaction,

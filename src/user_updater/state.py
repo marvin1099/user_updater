@@ -10,7 +10,15 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-_PHASES = {"idle", "awaiting_response", "deferred", "running", "succeeded", "failed"}
+_PHASES = {
+    "idle",
+    "awaiting_response",
+    "deferred",
+    "waiting_for_internet",
+    "running",
+    "succeeded",
+    "failed",
+}
 _OPTIONAL_TEXT_FIELDS = {
     "next_scheduled_at",
     "run_id",
@@ -21,6 +29,9 @@ _OPTIONAL_TEXT_FIELDS = {
     "finished_at",
     "retry_group_id",
     "retry_after",
+    "internet_wait_resume_phase",
+    "internet_wait_resume_message",
+    "internet_wait_action",
 }
 
 
@@ -46,6 +57,9 @@ class UpdateState:
     returncode: int | None = None
     message: str = "Waiting for the next scheduled update."
     last_output: tuple[str, ...] = ()
+    internet_wait_resume_phase: str | None = None
+    internet_wait_resume_message: str | None = None
+    internet_wait_action: str | None = None
 
     @classmethod
     def from_mapping(cls, raw: Any) -> UpdateState:
@@ -65,6 +79,28 @@ class UpdateState:
                 raise StateError(f"{name} must be a string or null")
         if not isinstance(values.get("message", "Waiting for the next scheduled update."), str):
             raise StateError("message must be a string")
+        internet_wait_action = values.get("internet_wait_action")
+        if internet_wait_action not in {None, "scheduled_prompt", "manual_prompt"}:
+            raise StateError("internet_wait_action must be a supported prompt action or null")
+        resume_phase = values.get("internet_wait_resume_phase")
+        if resume_phase is not None and resume_phase not in {
+            "idle",
+            "awaiting_response",
+            "deferred",
+            "succeeded",
+            "failed",
+        }:
+            raise StateError("internet_wait_resume_phase must be a prior scheduler phase or null")
+        if resume_phase is not None and (
+            phase != "waiting_for_internet" or internet_wait_action is None
+        ):
+            raise StateError("internet prompt wait details require a waiting_for_internet phase")
+        if internet_wait_action is not None and (
+            phase != "waiting_for_internet" or resume_phase is None
+        ):
+            raise StateError("internet prompt wait details require a waiting_for_internet phase")
+        if resume_phase is None and values.get("internet_wait_resume_message") is not None:
+            raise StateError("internet_wait_resume_message requires a resume phase")
         deferrals_used = values.get("deferrals_used", 0)
         if type(deferrals_used) is not int or deferrals_used < 0:
             raise StateError("deferrals_used must be a non-negative integer")

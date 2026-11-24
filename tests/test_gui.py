@@ -6,13 +6,14 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QEventLoop, Qt, QTimer
+from PySide6.QtCore import QEventLoop, Qt, QTime, QTimer
 from PySide6.QtGui import QColor, QDesktopServices, QPalette
 from PySide6.QtWidgets import QApplication, QCheckBox, QGroupBox, QLabel, QWidget
 
 from user_updater.gui import admin as admin_gui
 from user_updater.gui.admin import AdminSettingsDialog
 from user_updater.gui.full_window import FullDetailsWindow
+from user_updater.gui.user_settings import UserScheduleDialog, save_user_schedule_policy
 from user_updater.gui.window import UpdaterWindow
 from user_updater.history import RunHistoryStore, history_path_for_state
 from user_updater.logging_config import daily_log_path
@@ -56,6 +57,61 @@ def test_startup_hides_persisted_success_until_status_is_requested(tmp_path: Pat
 
     window.show_status()
     assert window.isVisible()
+    window.deleteLater()
+
+
+def test_waiting_for_internet_is_shown_without_a_running_elapsed_timer(tmp_path: Path) -> None:
+    app = _application()
+    store = StateStore(tmp_path / "user.json")
+    store.save(
+        UpdateState(
+            phase="waiting_for_internet",
+            run_id="gated-run",
+            message="Waiting for internet connection; updates have not started.",
+        )
+    )
+    window = UpdaterWindow(
+        load_policy(),
+        store,
+        tmp_path / "request.json",
+        start_timer=False,
+    )
+    app.processEvents()
+
+    assert window.phase == "waiting_for_internet"
+    assert window.heading.text() == "Waiting for internet"
+    assert "have not started" in window.message.text()
+    assert "Waiting For Internet" in window.user_panel.status.text()
+    assert window.user_panel.elapsed.isHidden()
+    window.deleteLater()
+
+
+def test_waiting_prompt_explains_internet_stability_before_notification(tmp_path: Path) -> None:
+    app = _application()
+    policy = load_policy()
+    policy = replace(policy, network=replace(policy.network, stable_seconds=90))
+    store = StateStore(tmp_path / "user.json")
+    store.save(
+        UpdateState(
+            phase="waiting_for_internet",
+            run_id="pending-prompt",
+            internet_wait_resume_phase="idle",
+            internet_wait_resume_message="Waiting for the next scheduled update.",
+            internet_wait_action="scheduled_prompt",
+            message="Waiting for stable internet before notifying users about updates.",
+        )
+    )
+    window = UpdaterWindow(
+        policy,
+        store,
+        tmp_path / "request.json",
+        start_timer=False,
+    )
+    app.processEvents()
+
+    assert window.phase == "waiting_for_internet"
+    assert "prompt will appear" in window.message.text()
+    assert "90 seconds" in window.message.text()
     window.deleteLater()
 
 
@@ -336,6 +392,11 @@ def test_admin_settings_dialog_builds_a_valid_policy_mapping(tmp_path: Path) -> 
     assert dialog.allow_custom_tools.isChecked()
     assert dialog.allow_custom_tools.parentWidget().title() == "Personal tools available to users"
     assert dialog.automatic_window_positioning.isChecked()
+    assert dialog.internet_stability_seconds.value() == 60
+    assert {
+        day for day, check in dialog.user_day_checks.items() if check.isChecked()
+    } == {"thu", "sun"}
+    assert dialog.user_tools_time.time().toString("HH:mm") == "18:00"
     assert not dialog.before_builder_scripts.isChecked()
     assert not dialog.before_root_scripts.isChecked()
     assert not dialog.after_builder_scripts.isChecked()
@@ -346,8 +407,10 @@ def test_admin_settings_dialog_builds_a_valid_policy_mapping(tmp_path: Path) -> 
     dialog.before_root_scripts.setChecked(True)
     dialog.after_builder_scripts.setChecked(True)
     dialog.after_root_scripts.setChecked(True)
+    dialog.user_day_checks["sat"].setChecked(False)
+    dialog.user_day_checks["tue"].setChecked(True)
+    dialog.user_tools_time.setTime(QTime(19, 30))
     dialog.run_user_tools.setChecked(False)
-    dialog.user_interval.setValue(12)
     dialog.allow_custom_tools.setChecked(False)
     dialog.tool_checks["flatpak"].setChecked(False)
     dialog.system_automatic_retries.setValue(3)
@@ -355,6 +418,7 @@ def test_admin_settings_dialog_builds_a_valid_policy_mapping(tmp_path: Path) -> 
     dialog.system_user_retries.setValue(2)
     dialog.user_tools_automatic_retries.setValue(1)
     dialog.user_tools_user_retries.setValue(3)
+    dialog.internet_stability_seconds.setValue(90)
     dialog.system_forced_failures.setValue(2)
     dialog.user_forced_successes.setValue(4)
     dialog.allow_deferral.setChecked(False)
@@ -372,6 +436,12 @@ def test_admin_settings_dialog_builds_a_valid_policy_mapping(tmp_path: Path) -> 
     assert len({day_rows[day] for day in ("mon", "tue", "wed", "thu")}) == 1
     assert len({day_rows[day] for day in ("fri", "sat", "sun")}) == 1
     assert day_rows["fri"] > day_rows["mon"]
+    user_day_rows = {
+        day: dialog.user_day_checks[day].geometry().y()
+        for day in ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+    }
+    assert len({user_day_rows[day] for day in ("mon", "tue", "wed", "thu")}) == 1
+    assert len({user_day_rows[day] for day in ("fri", "sat", "sun")}) == 1
     assert dialog.schedule_group.title() == "Update schedules"
     dialog.testing_section.header.click()
     assert dialog.testing_section.is_expanded()
@@ -383,11 +453,19 @@ def test_admin_settings_dialog_builds_a_valid_policy_mapping(tmp_path: Path) -> 
     assert mapping["updates"]["allow_custom_user_tools"] is False
     assert "flatpak" not in mapping["updates"]["user_tools"]
     assert mapping["window"]["automatic_positioning"] is False
+    assert mapping["network"]["stable_seconds"] == 90
     assert mapping["system_scripts"] == {
         "before": {"builder": True, "root": True},
         "after": {"builder": True, "root": True},
     }
-    assert mapping["schedule"]["user_tools_interval_hours"] == 12
+    assert mapping["schedule"]["days"] == ["thu", "sun"]
+    assert mapping["schedule"]["time"] == "03:00"
+    assert mapping["schedule"]["user_tools_days"] == [
+        "tue",
+        "thu",
+        "sun",
+    ]
+    assert mapping["schedule"]["user_tools_time"] == "19:30"
     assert mapping["interaction"] == {
         "allow_deferral": False,
         "allow_system_deferral": True,
@@ -411,6 +489,67 @@ def test_admin_settings_dialog_builds_a_valid_policy_mapping(tmp_path: Path) -> 
     assert not dialog.testing_section.is_expanded()
     assert isinstance(dialog.testing_section.content, QGroupBox)
     dialog.deleteLater()
+
+
+def test_user_schedule_settings_save_only_the_users_calendar_schedule(tmp_path: Path) -> None:
+    _application()
+    policy = load_policy()
+    dialog = UserScheduleDialog(policy)
+
+    assert {
+        day for day, check in dialog.day_checks.items() if check.isChecked()
+    } == {"thu", "sun"}
+    dialog.day_checks["thu"].setChecked(False)
+    dialog.day_checks["tue"].setChecked(True)
+    dialog.start_time.setTime(QTime(20, 15))
+    updated = dialog.policy_from_controls()
+
+    assert updated.schedule.days == policy.schedule.days
+    assert updated.schedule.time == policy.schedule.time
+    assert updated.schedule.user_tools_days == ("tue", "sun")
+    assert updated.schedule.user_tools_time == "20:15"
+
+    policy_file = tmp_path / ".config" / "user-updater" / "project.yaml"
+    saved = save_user_schedule_policy(policy_file, updated)
+
+    assert saved == updated
+    assert load_policy(policy_file) == updated
+    assert policy_file.stat().st_mode & 0o777 == 0o600
+
+
+def test_user_only_compact_window_shows_schedule_settings_without_admin_or_system_controls(
+    tmp_path: Path,
+) -> None:
+    _application()
+    window = UpdaterWindow(
+        load_policy(),
+        StateStore(tmp_path / "user.json"),
+        tmp_path / "request.json",
+        start_timer=False,
+        user_settings_enabled=True,
+    )
+
+    assert window.system_panel is None
+    assert not window.user_settings_button.isHidden()
+    assert window.admin_button.isHidden()
+    window.deleteLater()
+
+
+def test_user_only_full_details_hides_system_updates_section(tmp_path: Path) -> None:
+    app = _application()
+    window = FullDetailsWindow(
+        None,
+        StateStore(tmp_path / "user.json"),
+        system_enabled=False,
+    )
+    window.show()
+    app.processEvents()
+
+    assert window.system_section.isHidden()
+    assert window.system_section.header.isHidden()
+    assert not window.user_section.header.isHidden()
+    assert not window.history_section.header.isHidden()
+    window.deleteLater()
 
 
 def test_applying_policy_updates_compact_window_placement_preference(tmp_path: Path) -> None:

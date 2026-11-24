@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from user_updater.history import RunHistoryStore
+from user_updater.internet import InternetStabilityGate
 from user_updater.policy import (
     TaskRetryPolicy,
     load_policy,
@@ -52,6 +53,253 @@ class FakeWorkflow:
                     on_progress_end()
         on_output("fake topgrade completed")
         return WorkflowResult(0, None, ())
+
+
+def test_service_waits_for_stable_internet_before_starting_workflow(tmp_path: Path) -> None:
+    class FakeClock:
+        now = 0.0
+
+        def monotonic(self) -> float:
+            return self.now
+
+        def sleep(self, seconds: float) -> None:
+            self.now += seconds
+
+    store = StateStore(tmp_path / "state.json")
+
+    class GateCheckingWorkflow(FakeWorkflow):
+        def __init__(self, state_store: StateStore) -> None:
+            super().__init__()
+            self.state_store = state_store
+
+        def run(self, on_output, _on_idle=None, *, on_progress=None, on_progress_end=None):
+            assert self.state_store.load().phase == "running"
+            return super().run(
+                on_output,
+                _on_idle,
+                on_progress=on_progress,
+                on_progress_end=on_progress_end,
+            )
+
+    store.save(
+        UpdateState(
+            phase="awaiting_response",
+            run_id="internet-gated-run",
+            scheduled_for=NOW.isoformat(),
+            response_deadline=NOW.isoformat(),
+        )
+    )
+    clock = FakeClock()
+    workflow = GateCheckingWorkflow(store)
+    observed_waiting_states: list[UpdateState] = []
+
+    def log_status(_message: str) -> None:
+        state = store.load()
+        if state.phase == "waiting_for_internet":
+            observed_waiting_states.append(state)
+            assert workflow.calls == 0
+
+    service = UpdateService(
+        load_policy(),
+        store,
+        workflow,
+        clock=lambda: NOW,
+        on_log=log_status,
+        internet_gate=InternetStabilityGate(
+            is_online=lambda: True,
+            stable_seconds=2,
+            check_interval=1,
+            sleep=clock.sleep,
+            monotonic=clock.monotonic,
+        ),
+    )
+
+    action = service.tick(NOW)
+
+    assert action.value == "run"
+    assert clock.now == 2
+    assert observed_waiting_states
+    assert all(state.started_at is None for state in observed_waiting_states)
+    assert workflow.calls == 1
+    assert store.load().phase == "succeeded"
+
+
+def test_service_resumes_a_persisted_internet_wait_without_restarting_the_prompt(
+    tmp_path: Path,
+) -> None:
+    store = StateStore(tmp_path / "state.json")
+    store.save(
+        UpdateState(
+            phase="waiting_for_internet",
+            run_id="persisted-wait",
+            scheduled_for=NOW.isoformat(),
+            message="Waiting for internet connection; updates have not started.",
+        )
+    )
+    workflow = FakeWorkflow()
+    service = UpdateService(
+        load_policy(),
+        store,
+        workflow,
+        clock=lambda: NOW,
+        internet_gate=InternetStabilityGate(
+            is_online=lambda: True,
+            stable_seconds=0,
+            check_interval=1,
+            sleep=lambda _seconds: None,
+            monotonic=lambda: 0,
+        ),
+    )
+
+    action = service.tick(NOW)
+
+    assert action.value == "run"
+    assert workflow.calls == 1
+    assert store.load().phase == "succeeded"
+
+
+def test_scheduled_prompt_is_not_created_until_internet_is_stable(tmp_path: Path) -> None:
+    class FakeClock:
+        now = 0.0
+
+        def monotonic(self) -> float:
+            return self.now
+
+        def sleep(self, seconds: float) -> None:
+            self.now += seconds
+
+    store = StateStore(tmp_path / "state.json")
+    store.save(UpdateState(next_scheduled_at=NOW.isoformat()))
+    clock = FakeClock()
+    workflow = FakeWorkflow()
+    waiting_states: list[UpdateState] = []
+
+    def log_status(_message: str) -> None:
+        state = store.load()
+        if state.phase == "waiting_for_internet":
+            waiting_states.append(state)
+            assert state.internet_wait_action == "scheduled_prompt"
+            assert workflow.calls == 0
+
+    checks = iter([False, False, True, True, True])
+    service = UpdateService(
+        load_policy(),
+        store,
+        workflow,
+        clock=lambda: NOW + timedelta(seconds=clock.now),
+        on_log=log_status,
+        internet_gate=InternetStabilityGate(
+            is_online=lambda: next(checks, True),
+            stable_seconds=2,
+            check_interval=1,
+            sleep=clock.sleep,
+            monotonic=clock.monotonic,
+        ),
+    )
+
+    action = service.tick(NOW)
+
+    state = store.load()
+    assert action.value == "waiting_for_response"
+    assert clock.now == 4
+    assert waiting_states
+    assert state.phase == "awaiting_response"
+    assert state.internet_wait_action is None
+    assert state.response_deadline == (
+        NOW + timedelta(seconds=4, minutes=load_policy().schedule.user_tools_response_minutes)
+    ).isoformat()
+    assert workflow.calls == 0
+
+
+def test_network_loss_during_response_window_delays_update_until_stable_again(
+    tmp_path: Path,
+) -> None:
+    class FakeClock:
+        now = 0.0
+
+        def monotonic(self) -> float:
+            return self.now
+
+        def sleep(self, seconds: float) -> None:
+            self.now += seconds
+
+    store = StateStore(tmp_path / "state.json")
+    store.save(
+        UpdateState(
+            phase="awaiting_response",
+            run_id="prompted-run",
+            scheduled_for=NOW.isoformat(),
+            response_deadline=NOW.isoformat(),
+        )
+    )
+    clock = FakeClock()
+    workflow = FakeWorkflow()
+    waiting_states: list[UpdateState] = []
+
+    def log_status(_message: str) -> None:
+        state = store.load()
+        if state.phase == "waiting_for_internet":
+            waiting_states.append(state)
+            assert state.internet_wait_action is None
+            assert workflow.calls == 0
+
+    checks = iter([False, False, True, True, True])
+    service = UpdateService(
+        load_policy(),
+        store,
+        workflow,
+        clock=lambda: NOW + timedelta(seconds=clock.now),
+        on_log=log_status,
+        internet_gate=InternetStabilityGate(
+            is_online=lambda: next(checks, True),
+            stable_seconds=2,
+            check_interval=1,
+            sleep=clock.sleep,
+            monotonic=clock.monotonic,
+        ),
+    )
+
+    action = service.tick(NOW)
+
+    assert action.value == "run"
+    assert clock.now == 4
+    assert waiting_states
+    assert workflow.calls == 1
+    assert store.load().phase == "succeeded"
+    assert store.load().started_at == (NOW + timedelta(seconds=4)).isoformat()
+
+
+def test_manually_queued_prompt_waits_for_internet_before_becoming_visible(
+    tmp_path: Path,
+) -> None:
+    store = StateStore(tmp_path / "state.json")
+    workflow = FakeWorkflow()
+    service = UpdateService(
+        load_policy(),
+        store,
+        workflow,
+        clock=lambda: NOW,
+        internet_gate=InternetStabilityGate(
+            is_online=lambda: True,
+            stable_seconds=0,
+            sleep=lambda _seconds: None,
+            monotonic=lambda: 0,
+        ),
+    )
+
+    queued = service.schedule_prompt_now(NOW)
+
+    assert queued.value == "waiting_for_internet"
+    assert store.load().phase == "waiting_for_internet"
+    assert store.load().internet_wait_action == "manual_prompt"
+    assert workflow.calls == 0
+
+    prompted = service.tick(NOW)
+
+    assert prompted.value == "waiting_for_response"
+    assert store.load().phase == "awaiting_response"
+    assert store.load().internet_wait_action is None
+    assert workflow.calls == 0
 
 
 def test_service_reads_valid_user_deferral_then_runs_after_response_window(
@@ -271,7 +519,6 @@ def test_manual_retry_starts_a_new_run_for_a_failed_task(tmp_path: Path) -> None
         store,
         workflow,
         clock=lambda: NOW,
-        interval_hours=24,
         lock_file=tmp_path / "locks" / "retry.lock",
         retry_policy=TaskRetryPolicy(
             automatic_attempts=2, delay_minutes=15, user_manual_attempts=1
@@ -286,7 +533,9 @@ def test_manual_retry_starts_a_new_run_for_a_failed_task(tmp_path: Path) -> None
     assert retried.phase == "succeeded"
     assert retried.run_id != "failed-run"
     assert retried.started_at == NOW.isoformat()
-    assert retried.next_scheduled_at == (NOW + timedelta(hours=24)).isoformat()
+    assert retried.next_scheduled_at == datetime(
+        2026, 11, 19, 18, 0, tzinfo=ZoneInfo("UTC")
+    ).isoformat()
     assert retried.last_output == ("fake topgrade completed",)
 
 
@@ -554,7 +803,6 @@ def test_only_the_owning_user_can_request_a_retry_of_personal_tools(tmp_path: Pa
         workflow,
         request_homes=lambda: [RequestHome(home, os.getuid())],
         task_id="user-tools",
-        interval_hours=24,
         lock_file=tmp_path / "locks" / "user-tools.lock",
         retry_policy=TaskRetryPolicy(
             automatic_attempts=2, delay_minutes=15, user_manual_attempts=1
@@ -613,7 +861,6 @@ def test_service_records_a_run_summary_after_completion(tmp_path: Path) -> None:
         request_homes=lambda: [],
         clock=lambda: NOW,
         task_id="user-tools",
-        interval_hours=24,
         response_minutes=1,
         lock_file=tmp_path / "locks" / "history.lock",
     )

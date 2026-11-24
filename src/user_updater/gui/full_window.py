@@ -36,7 +36,7 @@ from ..tool_preferences import ToolPreferenceError, UserToolPreferenceStore
 from .collapsible import CollapsibleSection
 from .placement import WindowPlacement
 
-_ACTIVE_PHASES = {"awaiting_response", "running", "deferred"}
+_ACTIVE_PHASES = {"awaiting_response", "waiting_for_internet", "running", "deferred"}
 _SGR_SEQUENCE = re.compile(r"\x1b\[([0-9;]*)m")
 _ANSI_COLORS = (
     "#000000",
@@ -245,6 +245,10 @@ class FullDetailsWindow(QWidget):
         self.system_section = CollapsibleSection(
             "System updates", self.system_tab, header_inside=False, checkbox_header=True
         )
+        self.system_section.header.setVisible(system_state_store is not None)
+        self.system_section.setVisible(
+            system_state_store is not None and self.system_section.is_expanded()
+        )
         self.user_section = CollapsibleSection(
             "User tools", self.user_tab, header_inside=False, checkbox_header=True
         )
@@ -387,7 +391,7 @@ class FullDetailsWindow(QWidget):
         expanded = frozenset(
             name
             for name, state in (("system", system_state), ("user", user_state))
-            if state.phase == "running"
+            if state.phase in {"running", "waiting_for_internet"}
         )
         if expanded == self._expanded_active_sections:
             return
@@ -618,7 +622,7 @@ class FullDetailsWindow(QWidget):
 
 
 def _elapsed_text(state: UpdateState) -> str:
-    if state.started_at is None:
+    if state.phase == "waiting_for_internet" or state.started_at is None:
         return "—"
     try:
         started = datetime.fromisoformat(state.started_at)

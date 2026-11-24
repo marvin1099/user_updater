@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from enum import StrEnum
 from uuid import uuid4
 
 from .policy import Policy, TaskRetryPolicy
 from .requests import UserRequest
 from .rescheduling import available_reschedule_hours
-from .schedule import next_scheduled_after
+from .schedule import local_timezone, next_scheduled_after
 from .state import StateStore, UpdateState
 
 
@@ -17,6 +17,7 @@ class TickAction(StrEnum):
     WORKER_ALREADY_ACTIVE = "worker_already_active"
     NOT_DUE = "not_due"
     WAITING_FOR_RESPONSE = "waiting_for_response"
+    WAITING_FOR_INTERNET = "waiting_for_internet"
     DEFERRED = "deferred"
     RUN = "run"
     RECOVERED_INTERRUPTED_RUN = "recovered_interrupted_run"
@@ -30,14 +31,12 @@ class UpdateCoordinator:
         policy: Policy,
         state_store: StateStore,
         *,
-        interval_hours: int | None = None,
         response_minutes: int | None = None,
         retry_policy: TaskRetryPolicy | None = None,
         task_id: str = "user-tools",
     ) -> None:
         self.policy = policy
         self.state_store = state_store
-        self.interval_hours = interval_hours
         self.response_minutes = response_minutes or policy.schedule.response_minutes
         self.retry_policy = retry_policy or policy.retry.user_tools
         self.task_id = task_id
@@ -109,11 +108,28 @@ class UpdateCoordinator:
             self.state_store.save(resumed)
             return self._handle_response_window(resumed, now, requests)
 
+        if (
+            self.task_id != "system"
+            and state.phase in {"succeeded", "failed"}
+            and state.finished_at is not None
+        ):
+            finished_at = _parse_datetime(state.finished_at, "finished_at")
+            if now.tzinfo is not None:
+                finished_at = finished_at.astimezone(now.tzinfo)
+            next_scheduled_at = self._next_scheduled_at(finished_at).isoformat()
+            if state.next_scheduled_at != next_scheduled_at:
+                state = UpdateState(
+                    **{**state.__dict__, "next_scheduled_at": next_scheduled_at}
+                )
+                self.state_store.save(state)
+
         due_at = (
             _parse_datetime(state.next_scheduled_at, "next_scheduled_at")
             if state.next_scheduled_at
             else (
-                now if self.interval_hours is not None else next_scheduled_after(self.policy, now)
+                now
+                if self.task_id != "system"
+                else next_scheduled_after(self.policy, now, self.task_id)
             )
         )
         if now < due_at:
@@ -136,6 +152,41 @@ class UpdateCoordinator:
         )
         self.state_store.save(pending)
         return TickAction.WAITING_FOR_RESPONSE
+
+    def prompt_is_due(self, now: datetime) -> bool:
+        """Return whether this tick would create or resume a user response prompt."""
+        state = self.state_store.load()
+        if state.phase in {"running", "awaiting_response"}:
+            return False
+        if state.phase == "failed" and (
+            state.retry_after is not None
+            and state.automatic_retries_used < self.retry_policy.automatic_attempts
+        ):
+            # A due automatic retry starts work directly, without a new prompt.
+            return False
+        if state.phase == "deferred":
+            return now >= _parse_datetime(state.deferred_until, "deferred_until")
+
+        if (
+            self.task_id != "system"
+            and state.phase in {"succeeded", "failed"}
+            and state.finished_at is not None
+        ):
+            finished_at = _parse_datetime(state.finished_at, "finished_at")
+            if now.tzinfo is not None:
+                finished_at = finished_at.astimezone(now.tzinfo)
+            due_at = self._next_scheduled_at(finished_at)
+        else:
+            due_at = (
+                _parse_datetime(state.next_scheduled_at, "next_scheduled_at")
+                if state.next_scheduled_at
+                else (
+                    now
+                    if self.task_id != "system"
+                    else next_scheduled_after(self.policy, now, self.task_id)
+                )
+            )
+        return now >= due_at
 
     def run_now(
         self,
@@ -339,9 +390,14 @@ class UpdateCoordinator:
         return TickAction.RUN
 
     def _next_scheduled_at(self, now: datetime) -> datetime:
-        if self.interval_hours is not None:
-            return now + timedelta(hours=self.interval_hours)
-        return next_scheduled_after(self.policy, now)
+        after = now
+        if self.task_id != "system":
+            if after.tzinfo is None:
+                after = after.replace(tzinfo=local_timezone())
+            # Catching up after a missed run should not trigger a second run
+            # at a later scheduled time on that same local calendar day.
+            after = datetime.combine(after.date(), time.max, tzinfo=after.tzinfo)
+        return next_scheduled_after(self.policy, after, self.task_id)
 
 
 def _parse_datetime(value: str | None, name: str) -> datetime:

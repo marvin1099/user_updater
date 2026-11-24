@@ -20,6 +20,7 @@ from .accounts import BuilderAccountManager
 from .coordinator import TickAction
 from .history import HistoryError, RunHistoryStore, RunRecord, history_path_for_state
 from .installer import InstallPaths, SystemInstaller, UserInstaller, UserInstallPaths
+from .internet import InternetStabilityGate
 from .logging_config import (
     configure_logging,
     configure_user_output_logging,
@@ -134,9 +135,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "validate-policy":
             loaded = load_policy(args.path)
             print(
-                f"Policy valid: {', '.join(loaded.schedule.days)} at "
-                f"{loaded.schedule.time}; response window "
-                f"{loaded.schedule.response_minutes} minutes."
+                f"Policy valid: system updates {', '.join(loaded.schedule.days)} at "
+                f"{loaded.schedule.time} (response window "
+                f"{loaded.schedule.response_minutes} minutes); personal tools "
+                f"{', '.join(loaded.schedule.user_tools_days)} at "
+                f"{loaded.schedule.user_tools_time} (response window "
+                f"{loaded.schedule.user_tools_response_minutes} minutes)."
             )
             return 0
         if args.command == "admin-auth-check":
@@ -236,6 +240,9 @@ def _tick(system_mode: bool) -> int:
                     on_log=logger.info,
                     task_id="system",
                     lock_file=paths.state.parent / "locks" / "system.lock",
+                    internet_gate=InternetStabilityGate(
+                        stable_seconds=system_policy.network.stable_seconds
+                    ),
                 ),
                 system_store,
             )
@@ -298,12 +305,14 @@ def _tick(system_mode: bool) -> int:
                         request_homes=request_homes_for_user,
                         on_log=logger.info,
                         task_id="user-tools",
-                        interval_hours=policy.schedule.user_tools_interval_hours,
                         response_minutes=policy.schedule.user_tools_response_minutes,
                         lock_file=(paths.state.parent / "locks" / f"user-tools-{user.uid}.lock"),
                         history_store=user_history_store,
                         log_output=not system_mode,
                         on_output_log=user_output_log,
+                        internet_gate=InternetStabilityGate(
+                            stable_seconds=user_policy.network.stable_seconds
+                        ),
                     ),
                     user_store,
                 )
@@ -396,6 +405,9 @@ def _retry(system_mode: bool) -> int:
         on_log=logger.info,
         task_id="system",
         lock_file=paths.state.parent / "locks" / "system.lock",
+        internet_gate=InternetStabilityGate(
+            stable_seconds=system_policy.network.stable_seconds
+        ),
     )
     action = service.retry_failed()
     if action is TickAction.WORKER_ALREADY_ACTIVE:
@@ -442,6 +454,9 @@ def _run_system_now(system_mode: bool) -> int:
         on_log=logger.info,
         task_id="system",
         lock_file=paths.state.parent / "locks" / "system.lock",
+        internet_gate=InternetStabilityGate(
+            stable_seconds=system_policy.network.stable_seconds
+        ),
     )
     action = service.run_now()
     if action is TickAction.WORKER_ALREADY_ACTIVE:
@@ -488,9 +503,11 @@ def _run_user_tools_now(system_mode: bool) -> int:
             request_homes=lambda selected=user: [RequestHome(selected.home, selected.uid)],
             on_log=logger.info,
             task_id="user-tools",
-            interval_hours=policy.schedule.user_tools_interval_hours,
             response_minutes=policy.schedule.user_tools_response_minutes,
             lock_file=paths.state.parent / "locks" / f"user-tools-{user.uid}.lock",
+            internet_gate=InternetStabilityGate(
+                stable_seconds=user_policy.network.stable_seconds
+            ),
         )
         action = service.run_now()
         state = state_store.load()
@@ -554,11 +571,20 @@ def _schedule_prompt(task_id: str, system_mode: bool) -> int:
             on_log=logger.info,
             task_id="system",
             lock_file=paths.state.parent / "locks" / "system.lock",
+            internet_gate=InternetStabilityGate(
+                stable_seconds=system_policy.network.stable_seconds
+            ),
         )
         action = service.schedule_prompt_now()
         if action is TickAction.WORKER_ALREADY_ACTIVE:
             raise RuntimeError("the system update worker is already active")
-        print(state_store.load().message)
+        if action is TickAction.WAITING_FOR_INTERNET:
+            print(
+                "The system update prompt will be shown after internet has been stable for "
+                f"{policy.network.stable_seconds} seconds."
+            )
+        else:
+            print(state_store.load().message)
         return 0
 
     if task_id != "user-tools":
@@ -570,6 +596,7 @@ def _schedule_prompt(task_id: str, system_mode: bool) -> int:
         raise ValueError("there is no active local desktop session to schedule")
 
     scheduled_users: list[str] = []
+    waiting_for_internet: list[str] = []
     errors: list[str] = []
     for user in desktop_users:
         user_policy = _user_policy_for(user, policy, logger)
@@ -587,9 +614,11 @@ def _schedule_prompt(task_id: str, system_mode: bool) -> int:
             request_homes=lambda selected=user: [RequestHome(selected.home, selected.uid)],
             on_log=logger.info,
             task_id="user-tools",
-            interval_hours=policy.schedule.user_tools_interval_hours,
             response_minutes=policy.schedule.user_tools_response_minutes,
             lock_file=paths.state.parent / "locks" / f"user-tools-{user.uid}.lock",
+            internet_gate=InternetStabilityGate(
+                stable_seconds=user_policy.network.stable_seconds
+            ),
         )
         try:
             action = service.schedule_prompt_now()
@@ -600,14 +629,24 @@ def _schedule_prompt(task_id: str, system_mode: bool) -> int:
             errors.append(f"{user.username}: the personal-tool update worker is already active")
             continue
         scheduled_users.append(user.username)
+        if action is TickAction.WAITING_FOR_INTERNET:
+            waiting_for_internet.append(user.username)
 
     if not scheduled_users:
         detail = "; ".join(errors) if errors else "no personal-tool prompts were scheduled"
         raise ValueError(detail)
-    print(
-        "Scheduled personal-tool update prompt(s) for "
-        f"{', '.join(scheduled_users)}. They will start after their response windows."
-    )
+    if waiting_for_internet:
+        print(
+            "Queued personal-tool update prompt(s) for "
+            f"{', '.join(waiting_for_internet)}. Users will be notified after internet has "
+            f"been stable for {policy.network.stable_seconds} seconds; updates begin after "
+            "their response windows."
+        )
+    else:
+        print(
+            "Scheduled personal-tool update prompt(s) for "
+            f"{', '.join(scheduled_users)}. Updates start after their response windows."
+        )
     for error in errors:
         print(f"Could not schedule prompt: {error}", file=sys.stderr)
     return int(bool(errors))
@@ -858,10 +897,14 @@ def _write_admin_policy_mapping(raw: object) -> None:
     saved = write_policy(paths.policy, raw)
     logger = configure_logging(Path("/var/log/user-updater/updater.log"))
     logger.info(
-        "administrator policy changed: system=%s user_tools=%s interval_hours=%d custom_tools=%s",
+        "administrator policy changed: system=%s system_schedule=%s@%s "
+        "user_tools=%s user_tools_schedule=%s@%s custom_tools=%s",
         saved.updates.run_system,
+        ",".join(saved.schedule.days),
+        saved.schedule.time,
         saved.updates.run_user_tools,
-        saved.schedule.user_tools_interval_hours,
+        ",".join(saved.schedule.user_tools_days),
+        saved.schedule.user_tools_time,
         saved.updates.allow_custom_user_tools,
     )
 

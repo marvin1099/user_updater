@@ -204,14 +204,14 @@ def test_backdated_late_response_does_not_extend_the_response_window(tmp_path: P
     assert action is TickAction.RUN
 
 
-def test_interval_schedule_starts_on_first_user_session_then_repeats_from_completion(
+def test_personal_tools_use_calendar_schedule_after_a_catch_up_run(
     tmp_path: Path,
 ) -> None:
     store = StateStore(tmp_path / "user-state.json")
+    store.save(UpdateState(next_scheduled_at=(NOW - timedelta(days=3)).isoformat()))
     coordinator = UpdateCoordinator(
         load_policy(),
         store,
-        interval_hours=24,
         response_minutes=3,
     )
 
@@ -220,10 +220,29 @@ def test_interval_schedule_starts_on_first_user_session_then_repeats_from_comple
     assert coordinator.tick(NOW + timedelta(minutes=3)) is TickAction.RUN
     coordinator.complete(0, NOW + timedelta(minutes=4))
 
-    due_at = NOW + timedelta(hours=24, minutes=4)
+    due_at = datetime(2026, 11, 19, 18, 0, tzinfo=ZoneInfo("UTC"))
     assert store.load().next_scheduled_at == due_at.isoformat()
     assert coordinator.tick(due_at - timedelta(seconds=1)) is TickAction.NOT_DUE
     assert coordinator.tick(due_at) is TickAction.WAITING_FOR_RESPONSE
+
+
+def test_personal_schedule_rebases_a_persisted_interval_deadline(
+    tmp_path: Path,
+) -> None:
+    store = StateStore(tmp_path / "user-state.json")
+    store.save(
+        UpdateState(
+            phase="succeeded",
+            finished_at=NOW.isoformat(),
+            next_scheduled_at=(NOW + timedelta(days=30)).isoformat(),
+        )
+    )
+    coordinator = UpdateCoordinator(load_policy(), store)
+
+    assert coordinator.tick(NOW) is TickAction.NOT_DUE
+    assert store.load().next_scheduled_at == datetime(
+        2026, 11, 19, 18, 0, tzinfo=ZoneInfo("UTC")
+    ).isoformat()
 
 
 def test_admin_can_disable_deferral_without_skipping_the_prompt(tmp_path: Path) -> None:

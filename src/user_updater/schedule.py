@@ -30,16 +30,26 @@ def local_timezone() -> tzinfo:
         return datetime.now().astimezone().tzinfo or ZoneInfo("UTC")
 
 
-def next_scheduled_after(policy: Policy, after: datetime) -> datetime:
-    """Return the next configured local occurrence strictly after ``after``."""
+def next_scheduled_after(
+    policy: Policy,
+    after: datetime,
+    task_id: str = "system",
+) -> datetime:
+    """Return the next configured local occurrence for one task."""
     if after.tzinfo is None:
         after = after.replace(tzinfo=local_timezone())
-    hour, minute = (int(part) for part in policy.schedule.time.split(":"))
+    if task_id == "system":
+        days = policy.schedule.days
+        clock = policy.schedule.time
+    else:
+        days = policy.schedule.user_tools_days
+        clock = policy.schedule.user_tools_time
+    hour, minute = (int(part) for part in clock.split(":"))
     scheduled_time = time(hour=hour, minute=minute)
 
     for offset in range(8):
         day = after.date() + timedelta(days=offset)
-        if day.weekday() not in {_DAY_INDEX[name] for name in policy.schedule.days}:
+        if day.weekday() not in {_DAY_INDEX[name] for name in days}:
             continue
         candidate = datetime.combine(day, scheduled_time, tzinfo=after.tzinfo)
         if candidate > after:

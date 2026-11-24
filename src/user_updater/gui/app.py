@@ -16,6 +16,7 @@ from ..state import StateStore
 from ..tool_preferences import UserToolPreferenceStore
 from .admin import open_admin_settings, start_system_retry
 from .full_window import FullDetailsWindow
+from .user_settings import open_user_schedule_settings
 from .window import UpdaterWindow
 
 
@@ -49,6 +50,7 @@ def run_gui(system_mode: bool = False) -> int:
         system_state_store=system_state,
         system_request_file=system_request,
         admin_enabled=system_mode,
+        user_settings_enabled=not system_mode,
     )
     full_window = FullDetailsWindow(
         system_state,
@@ -86,7 +88,11 @@ def run_gui(system_mode: bool = False) -> int:
         full_window.hide()
         window.show_status()
 
+    current_policy = policy
+
     def policy_saved(updated_policy) -> None:
+        nonlocal current_policy
+        current_policy = updated_policy
         window.apply_policy(updated_policy)
         full_window.set_positioning_enabled(updated_policy.window.automatic_positioning)
         full_window.system_enabled = system_mode and updated_policy.updates.run_system
@@ -106,6 +112,14 @@ def run_gui(system_mode: bool = False) -> int:
         lambda: open_admin_settings(
             window,
             paths.policy,
+            policy_saved,
+        )
+    )
+    window.user_settings_requested.connect(
+        lambda: open_user_schedule_settings(
+            window,
+            paths.policy,
+            current_policy,
             policy_saved,
         )
     )
@@ -134,7 +148,13 @@ def run_gui(system_mode: bool = False) -> int:
             active_phase = phase if phase is not None else window.phase
             active = active_phase in {"awaiting_response", "running"}
             quit_action.setEnabled(not active)
-            tray.setToolTip("Updates running — do not power off" if active else "User Updater")
+            tray.setToolTip(
+                "Waiting for internet — updates have not started"
+                if active_phase == "waiting_for_internet"
+                else "Updates running — do not power off"
+                if active
+                else "User Updater"
+            )
 
         window.phase_changed.connect(update_tray_actions)
         update_tray_actions()

@@ -6,9 +6,14 @@ schedule:
   days: [thu, sun]
   time: "03:00"
   response_minutes: 5
-  user_tools_interval_hours: 24
+  user_tools_days: [thu, sun]
+  user_tools_time: "18:00"
   user_tools_response_minutes: 5
   check_interval_minutes: 1
+
+network:
+  # Require uninterrupted internet before notifying users or starting update commands/hooks.
+  stable_seconds: 60
 
 interaction:
   # Controls rescheduling; the same delay choices are bounded by elapsed time.
