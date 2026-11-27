@@ -36,7 +36,7 @@ def run_gui(system_mode: bool = False) -> int:
     paths = system_paths(home) if system_mode else user_paths(home)
     policy = load_policy(paths.policy if paths.policy.exists() else None)
     user_state_path = paths.user_state_dir / f"{os.getuid()}.json" if system_mode else paths.state
-    user_state = StateStore(user_state_path, file_mode=0o644 if system_mode else 0o600)
+    user_state = StateStore(user_state_path, file_mode=0o600)
     system_state = StateStore(paths.state) if system_mode else None
     user_request = task_request_path(home, "user-tools")
     system_request = task_request_path(home, "system") if system_mode else None

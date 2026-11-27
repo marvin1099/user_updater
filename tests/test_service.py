@@ -824,6 +824,7 @@ def test_automatic_retry_waits_for_configured_delay_and_runs_without_user_action
 
 
 def test_only_the_owning_user_can_request_a_retry_of_personal_tools(tmp_path: Path) -> None:
+    retry_now = datetime.now(ZoneInfo("UTC"))
     home = tmp_path / "alice"
     home.mkdir()
     request_file = task_request_path(home, "user-tools")
@@ -832,7 +833,7 @@ def test_only_the_owning_user_can_request_a_retry_of_personal_tools(tmp_path: Pa
         UpdateState(
             phase="failed",
             run_id="failed-user-run",
-            next_scheduled_at=(NOW + timedelta(days=1)).isoformat(),
+            next_scheduled_at=(retry_now + timedelta(days=1)).isoformat(),
             returncode=1,
         )
     )
@@ -853,7 +854,11 @@ def test_only_the_owning_user_can_request_a_retry_of_personal_tools(tmp_path: Pa
         ),
     )
 
-    action = service.tick(NOW)
+    response_now = datetime.fromtimestamp(
+        request_file.stat().st_ctime + 1,
+        tz=ZoneInfo("UTC"),
+    )
+    action = service.tick(response_now)
 
     assert action.value == "run"
     assert store.load().phase == "succeeded"

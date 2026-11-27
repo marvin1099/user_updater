@@ -7,7 +7,7 @@ import os
 import stat
 import tempfile
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -83,25 +83,42 @@ def load_request(path: Path, expected_uid: int | None, expected_run_id: str) -> 
             flags |= os.O_NOFOLLOW
         descriptor = os.open(path, flags)
         with os.fdopen(descriptor, "rb") as stream:
-            metadata = os.fstat(stream.fileno())
-            if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > 4096:
+            before = os.fstat(stream.fileno())
+            if not stat.S_ISREG(before.st_mode) or before.st_size > 4096:
                 return None
-            if expected_uid is not None and metadata.st_uid != expected_uid:
+            if expected_uid is not None and before.st_uid != expected_uid:
                 return None
             content = stream.read(4097)
-        if len(content) > 4096:
-            return None
+            metadata = os.fstat(stream.fileno())
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_size > 4096
+                or len(content) > 4096
+                or (metadata.st_dev, metadata.st_ino, metadata.st_ctime_ns)
+                != (before.st_dev, before.st_ino, before.st_ctime_ns)
+                or (expected_uid is not None and metadata.st_uid != expected_uid)
+            ):
+                return None
         raw: Any = json.loads(content.decode("utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError):
         return None
 
     if not _valid_payload(raw) or raw["run_id"] != expected_run_id:
         return None
+    # The JSON timestamp is client-controlled. Inode ctime cannot be backdated
+    # by an unprivileged client, so use it as the authoritative submission time.
+    try:
+        submitted_at = datetime.fromtimestamp(
+            metadata.st_ctime_ns / 1_000_000_000,
+            tz=UTC,
+        ).astimezone().isoformat()
+    except (OSError, OverflowError, ValueError):
+        return None
     return UserRequest(
         run_id=raw["run_id"],
         action=raw["action"],
         hours=raw["hours"],
-        submitted_at=raw["submitted_at"],
+        submitted_at=submitted_at,
     )
 
 

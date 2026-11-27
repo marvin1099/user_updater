@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from xml.etree import ElementTree
 
@@ -138,6 +139,35 @@ def test_system_reinstall_preserves_admin_policy_and_uninstall_preserves_data(
     assert not (paths.unit_dir / "user-updater.service").exists()
     assert not (paths.autostart_dir / "user-updater.desktop").exists()
     assert not paths.polkit_action_file.exists()
+
+
+def test_system_install_restricts_existing_per_user_state_and_history(
+    tmp_path: Path,
+) -> None:
+    paths = InstallPaths(
+        policy_file=tmp_path / "etc" / "project.yaml",
+        state_dir=tmp_path / "var" / "state",
+        unit_dir=tmp_path / "systemd",
+        autostart_dir=tmp_path / "autostart",
+        log_file=tmp_path / "log" / "updater.log",
+        executable=Path("/usr/local/bin/user-updater"),
+        polkit_action_file=tmp_path / "polkit" / "org.userupdater.policy",
+    )
+    user_state_dir = paths.state_dir / "users"
+    user_state_dir.mkdir(parents=True)
+    state_file = user_state_dir / f"{os.getuid()}.json"
+    history_file = user_state_dir / f"{os.getuid()}.history.json"
+    for path in (state_file, history_file):
+        path.write_text("{}", encoding="utf-8")
+        path.chmod(0o644)
+
+    SystemInstaller(paths, systemd=FakeSystemd()).install()
+
+    for path in (state_file, history_file):
+        metadata = path.stat()
+        assert metadata.st_mode & 0o777 == 0o400
+        assert metadata.st_uid == os.getuid()
+        assert metadata.st_gid == os.getgid()
 
 
 def test_user_install_defaults_to_user_tools_only(tmp_path: Path) -> None:

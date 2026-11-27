@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import pwd
 import shutil
 import subprocess
 import tempfile
@@ -15,6 +16,7 @@ from xml.sax.saxutils import escape
 from .paths import migrate_legacy_directory, migrate_user_data_dirs
 from .policy import default_policy_text, load_policy
 from .script_hooks import ensure_hook_directories
+from .state import StateStore
 
 
 class SystemdAdapter(Protocol):
@@ -98,8 +100,25 @@ class SystemInstaller:
         ensure_hook_directories(paths.policy_file.parent / "scripts")
         paths.state_dir.mkdir(mode=0o755, parents=True, exist_ok=True)
         paths.state_dir.chmod(0o755)
-        (paths.state_dir / "users").mkdir(mode=0o755, exist_ok=True)
-        (paths.state_dir / "users").chmod(0o755)
+        user_state_dir = paths.state_dir / "users"
+        user_state_dir.mkdir(mode=0o755, exist_ok=True)
+        user_state_dir.chmod(0o755)
+        for state_file in user_state_dir.glob("*.json"):
+            owner_name = state_file.name.removesuffix(".history.json")
+            if owner_name == state_file.name:
+                owner_name = state_file.stem
+            try:
+                uid = int(owner_name)
+                account = pwd.getpwuid(uid)
+                owner = (uid, account.pw_gid)
+            except (ValueError, OverflowError, KeyError):
+                owner = (0, 0)
+            StateStore(
+                state_file,
+                file_mode=0o400,
+                owner_uid=owner[0],
+                owner_gid=owner[1],
+            ).ensure_permissions()
         (paths.state_dir / "locks").mkdir(mode=0o700, exist_ok=True)
         (paths.state_dir / "locks").chmod(0o700)
         paths.log_file.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
