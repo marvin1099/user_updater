@@ -23,6 +23,10 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
+      - name: Install Qt runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libegl1 libgl1 libxkbcommon0
       - run: uv sync --locked --all-groups
       - run: uv run ruff check src tests setup.py
       - run: uv run pytest -q
@@ -40,6 +44,10 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
+      - name: Install Qt runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libegl1 libgl1 libxkbcommon0
       - run: uv sync --locked --all-groups
       - run: uv build
       - name: Install built wheel outside the checkout

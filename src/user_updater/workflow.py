@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -349,8 +350,57 @@ class UpdateWorkflow:
         command = [executable, "--notify-end", "never"]
         if cleanup:
             command.append("--cleanup")
+        fwupdmgr = self.which(
+            "fwupdmgr",
+            path="/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin",
+        )
+        if fwupdmgr is not None:
+            # The builder intentionally has no general-purpose privilege grant.
+            # fwupd requires an authorized system identity, so defer just this
+            # Topgrade step to the root-owned system service.
+            command.extend(("--disable", "firmware"))
         command.append("--no-retry")
-        return self.runner(command, **options)
+        result = self.runner(command, **options)
+        if fwupdmgr is None:
+            return result
+
+        on_output(f"Running Topgrade's firmware step as root ({fwupdmgr} detected).")
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir="/tmp",
+            prefix="user-updater-topgrade-",
+            suffix=".toml",
+            delete=False,
+        ) as stream:
+            os.fchmod(stream.fileno(), 0o600)
+            stream.write("[misc]\nassume_yes = true\n\n[firmware]\nupgrade = true\n")
+            firmware_config = Path(stream.name)
+        try:
+            firmware_result = self.runner(
+                [
+                    executable,
+                    "--config",
+                    str(firmware_config),
+                    "--only",
+                    "firmware",
+                    "--allow-root",
+                    "--yes",
+                    "firmware",
+                    "--notify-end",
+                    "never",
+                    "--no-retry",
+                ],
+                on_output=on_output,
+                on_idle=on_idle,
+                on_progress=on_progress,
+                on_progress_end=on_progress_end,
+                env=_root_script_environment(),
+                cwd=Path("/"),
+            )
+        finally:
+            firmware_config.unlink(missing_ok=True)
+        return _keep_first_failure(result, firmware_result)
 
     @staticmethod
     def _write_topgrade_config(account: BuilderAccount, *, use_paru: bool = False) -> None:

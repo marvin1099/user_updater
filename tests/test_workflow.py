@@ -91,6 +91,107 @@ def test_topgrade_runs_as_the_temporary_builder_and_is_cleaned(tmp_path: Path) -
     assert "Packages updated" in output
 
 
+def test_fwupd_runs_as_root_in_a_firmware_only_topgrade_pass(tmp_path: Path) -> None:
+    config = tmp_path / "project.yaml"
+    config.write_text("version: 1\nupdates:\n  run_user_tools: false\n", encoding="utf-8")
+    manager = FakeBuilderManager(tmp_path / "builders")
+    calls: list[tuple[list[str], dict[str, object]]] = []
+    firmware_configs: list[Path] = []
+
+    def runner(command: list[str], **kwargs: object) -> CommandResult:
+        calls.append((command, kwargs))
+        if "--only" in command:
+            config_path = Path(command[command.index("--config") + 1])
+            assert config_path.read_text(encoding="utf-8") == (
+                "[misc]\nassume_yes = true\n\n[firmware]\nupgrade = true\n"
+            )
+            assert stat.S_IMODE(config_path.stat().st_mode) == 0o600
+            firmware_configs.append(config_path)
+        return CommandResult(0, 1.0, False, ())
+
+    def which(name: str, path: str | None = None) -> str | None:
+        return {
+            "topgrade": "/usr/bin/topgrade",
+            "fwupdmgr": "/usr/bin/fwupdmgr",
+        }.get(name)
+
+    workflow = UpdateWorkflow(
+        policy=load_policy(config),
+        builder_manager=manager,
+        runner=runner,
+        which=which,
+        session_detector=lambda: [],
+    )
+    output: list[str] = []
+
+    result = workflow.run(output.append)
+
+    assert result.returncode == 0
+    assert len(calls) == 2
+    builder_command, builder_options = calls[0]
+    assert builder_command == [
+        "/usr/bin/topgrade",
+        "--notify-end",
+        "never",
+        "--cleanup",
+        "--disable",
+        "firmware",
+        "--no-retry",
+    ]
+    assert builder_options["user_id"] == manager.account.uid
+    firmware_command, firmware_options = calls[1]
+    assert firmware_command == [
+        "/usr/bin/topgrade",
+        "--config",
+        str(firmware_configs[0]),
+        "--only",
+        "firmware",
+        "--allow-root",
+        "--yes",
+        "firmware",
+        "--notify-end",
+        "never",
+        "--no-retry",
+    ]
+    assert "user_id" not in firmware_options
+    assert firmware_options["env"]["HOME"] == "/root"
+    assert firmware_options["env"]["USER"] == "root"
+    assert firmware_options["cwd"] == Path("/")
+    assert any("firmware step as root" in line for line in output)
+    assert manager.removed == [manager.account]
+    assert len(firmware_configs) == 1
+    assert not firmware_configs[0].exists()
+
+
+def test_root_firmware_failure_is_reported_and_builder_is_cleaned(tmp_path: Path) -> None:
+    config = tmp_path / "project.yaml"
+    config.write_text("version: 1\nupdates:\n  run_user_tools: false\n", encoding="utf-8")
+    manager = FakeBuilderManager(tmp_path / "builders")
+    calls: list[list[str]] = []
+
+    def runner(command: list[str], **_kwargs: object) -> CommandResult:
+        calls.append(command)
+        return CommandResult(int("--only" in command), 1.0, False, ())
+
+    workflow = UpdateWorkflow(
+        policy=load_policy(config),
+        builder_manager=manager,
+        runner=runner,
+        which=lambda name, path=None: {
+            "topgrade": "/usr/bin/topgrade",
+            "fwupdmgr": "/usr/bin/fwupdmgr",
+        }.get(name),
+        session_detector=lambda: [],
+    )
+
+    result = workflow.run(lambda _line: None)
+
+    assert result.returncode == 1
+    assert len(calls) == 2
+    assert not Path(calls[1][calls[1].index("--config") + 1]).exists()
+    assert manager.removed == [manager.account]
+
+
 def test_system_hooks_run_in_order_as_the_selected_identity(tmp_path: Path) -> None:
     config = tmp_path / "project.yaml"
     config.write_text(
@@ -291,7 +392,7 @@ def test_garuda_uses_full_topgrade_without_a_custom_paru_command(tmp_path: Path)
     assert "UPDATE_AUR" not in garuda_environment
     assert "user_id" not in calls[0][1]
     assert calls[1][1]["user_id"] == manager.account.uid
-    assert which_calls == ["topgrade"]
+    assert which_calls == ["topgrade", "fwupdmgr"]
     assert "assume_yes = true" in (manager.account.home / ".config" / "topgrade.toml").read_text(
         encoding="utf-8"
     )
