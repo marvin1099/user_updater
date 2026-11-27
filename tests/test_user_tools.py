@@ -19,14 +19,16 @@ def test_user_tool_commands_run_as_the_selected_desktop_user(tmp_path: Path) -> 
         runner=runner,
         which=lambda name, path=None: f"/usr/bin/{name}" if name == "flatpak" else None,
     )
-    user = DesktopUser("alice", 1001, 1001, home, tmp_path / "runtime")
+    selected_uid = os.geteuid() + 1
+    selected_gid = os.getegid() + 1
+    user = DesktopUser("alice", selected_uid, selected_gid, home, tmp_path / "runtime")
 
     results = updater.update_user(user, ("flatpak", "pipx"), lambda _line: None)
 
     assert len(calls) == 1
     assert calls[0][0] == ["/usr/bin/flatpak", "update", "--user", "-y"]
-    assert calls[0][1]["user_id"] == 1001
-    assert calls[0][1]["group_id"] == 1001
+    assert calls[0][1]["user_id"] == selected_uid
+    assert calls[0][1]["group_id"] == selected_gid
     assert calls[0][1]["env"]["HOME"] == str(home)
     assert results[0].tool == "flatpak"
     assert results[0].returncode == 0
