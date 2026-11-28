@@ -89,7 +89,7 @@ Run these as `user-updater <command>`:
 | View or export logs | `logs --system` (root only) | `logs --user` |
 | Open the desktop client | `gui --system` | `gui --user` |
 | Request a retry | `retry --system` (polkit) | `retry --user` |
-| Start updates immediately | `run-now --system` (root only) | — |
+| Start updates immediately | `run-now --system` (root only) | `run-now --user` (this user's tools) |
 | Run one scheduler check | `tick --system` (normally systemd) | — |
 | Install or remove integration | `install --system`, `uninstall --system` | `install --user`, `uninstall --user` |
 
