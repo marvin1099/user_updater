@@ -77,6 +77,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run only this account's personal-tool updates",
     )
 
+    run_user_tools_now = commands.add_parser(
+        "run-user-tools-now",
+        help="Run personal-tool updates for all active users immediately",
+    )
+    run_user_tools_now.add_argument(
+        "--system",
+        action="store_true",
+        required=True,
+        help="Use the administrator-managed installation (root required)",
+    )
+
     prompt_now = commands.add_parser(
         "schedule-prompt",
         help="Schedule a personal-tool update prompt immediately",
@@ -136,6 +147,8 @@ def main(argv: list[str] | None = None) -> int:
             if args.system:
                 return _run_system_now(system_mode)
             return _run_current_user_now(system_mode)
+        if args.command == "run-user-tools-now":
+            return _run_user_tools_now(system_mode)
         if args.command == "schedule-prompt":
             return _schedule_current_user_prompt(system_mode)
         if args.command == "history":

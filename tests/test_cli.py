@@ -42,6 +42,29 @@ def test_run_now_command_requires_an_explicit_scope() -> None:
         cli.build_parser().parse_args(["run-now"])
 
 
+def test_run_user_tools_now_command_requires_system_scope() -> None:
+    parser = cli.build_parser()
+
+    args = parser.parse_args(["run-user-tools-now", "--system"])
+    assert args.command == "run-user-tools-now"
+    assert args.system is True
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(["run-user-tools-now"])
+
+
+def test_run_user_tools_now_command_dispatches_to_admin_worker(monkeypatch) -> None:
+    observed: list[bool] = []
+    monkeypatch.setattr(
+        cli,
+        "_run_user_tools_now",
+        lambda system_mode: observed.append(system_mode) or 7,
+    )
+
+    assert cli.main(["run-user-tools-now", "--system"]) == 7
+    assert observed == [True]
+
+
 def test_schedule_prompt_command_is_user_scoped() -> None:
     args = cli.build_parser().parse_args(["schedule-prompt", "--user"])
 

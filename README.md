@@ -89,11 +89,14 @@ Run these as `user-updater <command>`:
 | View or export logs | `logs --system` (root only) | `logs --user` |
 | Open the desktop client | `gui --system` | `gui --user` |
 | Request a retry | `retry --system` (polkit) | `retry --user` |
-| Start updates immediately | `run-now --system` (root only) | `run-now --user` (this user's tools) |
+| Start system updates immediately | `run-now --system` (root only) | — |
+| Start personal-tool updates immediately | `run-user-tools-now --system` (root only; all active users) | `run-now --user` (this user's tools) |
 | Run one scheduler check | `tick --system` (normally systemd) | — |
 | Install or remove integration | `install --system`, `uninstall --system` | `install --user`, `uninstall --user` |
 
 Add `--output FILE` to export logs. Add `--purge` to uninstall to also remove the policy and saved state. Other useful commands are `user-updater doctor` and `user-updater demo`.
+
+`run-user-tools-now --system` starts personal-tool updates for every active local desktop user. It follows the administrator's tool allow-list and internet-stability settings.
 
 ## Development
 
